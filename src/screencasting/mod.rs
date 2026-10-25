@@ -103,6 +103,17 @@ impl State {
             })
             .unwrap_or_default();
 
+        // Like mutter, only offer single-plane modifiers (plus the implicit one). Some consumers
+        // rely on that: gnome-remote-desktop advertises multi-plane modifiers (e.g. AMD DCC) but
+        // then refuses buffers with more than one plane.
+        render_formats = render_formats
+            .into_iter()
+            .filter(|f| {
+                f.modifier == Modifier::Invalid
+                    || gbm.format_modifier_plane_count(f.code, f.modifier) == Some(1)
+            })
+            .collect();
+
         {
             let config = self.niri.config.borrow();
             if config.debug.force_pipewire_invalid_modifier {

@@ -70,7 +70,10 @@ const CAST_DELAY_ALLOWANCE: Duration = Duration::from_micros(100);
 const SHM_BLOCKS: usize = 1;
 const SHM_BYTES_PER_PIXEL: usize = 4;
 
-const CURSOR_FORMAT: spa_video_format = SPA_VIDEO_FORMAT_BGRA;
+// RGBA like mutter: gnome-remote-desktop only accepts RGBA cursor bitmaps and treats anything
+// else as a hidden cursor. Must match CURSOR_FOURCC (DRM ABGR8888 is R, G, B, A in memory).
+const CURSOR_FORMAT: spa_video_format = SPA_VIDEO_FORMAT_RGBA;
+const CURSOR_FOURCC: Fourcc = Fourcc::Abgr8888;
 const CURSOR_BPP: u32 = 4;
 const CURSOR_WIDTH: u32 = 384;
 const CURSOR_HEIGHT: u32 = 384;
@@ -1880,7 +1883,7 @@ unsafe fn add_cursor_metadata(
             size,
             cursor_data.scale,
             Transform::Normal,
-            Fourcc::Argb8888,
+            CURSOR_FOURCC,
             cursor_data.relocated.iter().rev(),
         ) {
             Ok(mapping) => mapping,
