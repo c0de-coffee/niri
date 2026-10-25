@@ -11,6 +11,7 @@ use zbus::{fdo, interface, ObjectServer};
 use super::mutter_remote_desktop::RemoteDesktopSessions;
 use super::{request_name, Start};
 use crate::backend::IpcOutputMap;
+use crate::utils::id::IdCounter;
 use crate::utils::{CastSessionId, CastStreamId};
 
 #[derive(Clone)]
@@ -63,6 +64,17 @@ struct RecordWindowProperties {
     _is_recording: Option<bool>,
 }
 
+#[derive(Debug, DeserializeDict, Type)]
+#[zvariant(signature = "dict")]
+struct RecordVirtualProperties {
+    #[zvariant(rename = "cursor-mode")]
+    cursor_mode: Option<CursorMode>,
+    #[zvariant(rename = "is-platform")]
+    _is_platform: Option<bool>,
+    #[zvariant(rename = "is-recording")]
+    _is_recording: Option<bool>,
+}
+
 #[derive(Clone)]
 pub struct Stream {
     id: CastStreamId,
@@ -78,12 +90,15 @@ enum StreamTarget {
     // FIXME: update on scale changes and whatnot.
     Output(niri_ipc::Output),
     Window { id: u64 },
+    /// A virtual output, created when the stream starts.
+    Virtual { name: String },
 }
 
 #[derive(Debug, Clone)]
 pub enum StreamTargetId {
     Output { name: String },
     Window { id: u64 },
+    Virtual { name: String },
 }
 
 #[derive(Debug, SerializeDict, Type, Value)]
@@ -336,6 +351,46 @@ impl Session {
         Ok(path)
     }
 
+    async fn record_virtual(
+        &mut self,
+        #[zbus(object_server)] server: &ObjectServer,
+        properties: RecordVirtualProperties,
+    ) -> fdo::Result<OwnedObjectPath> {
+        debug!(?properties, "record_virtual");
+
+        static COUNTER: IdCounter = IdCounter::new();
+        let name = format!("Virtual-{}", COUNTER.next());
+
+        let stream_id = CastStreamId::next();
+        let path = format!("/org/gnome/Mutter/ScreenCast/Stream/u{}", stream_id.get());
+        let path = OwnedObjectPath::try_from(path).unwrap();
+
+        let cursor_mode = properties.cursor_mode.unwrap_or_default();
+
+        let target = StreamTarget::Virtual { name };
+        let stream = Stream::new(
+            stream_id,
+            self.id,
+            target,
+            cursor_mode,
+            self.to_niri.clone(),
+        );
+        match server.at(&path, stream.clone()).await {
+            Ok(true) => {
+                let iface = server.interface(&path).await.unwrap();
+                self.streams.lock().unwrap().push((stream, iface));
+            }
+            Ok(false) => return Err(fdo::Error::Failed("stream path already exists".to_owned())),
+            Err(err) => {
+                return Err(fdo::Error::Failed(format!(
+                    "error creating stream object: {err:?}"
+                )))
+            }
+        }
+
+        Ok(path)
+    }
+
     #[zbus(signal)]
     async fn closed(ctxt: &SignalEmitter<'_>) -> zbus::Result<()>;
 }
@@ -387,6 +442,14 @@ impl Stream {
                     position: (0, 0),
                     size: (1, 1),
                     mapping_id: None,
+                }
+            }
+            StreamTarget::Virtual { name } => {
+                // The output doesn't exist yet; its size is picked by the consumer anyway.
+                StreamParameters {
+                    position: (0, 0),
+                    size: (1, 1),
+                    mapping_id: Some(name.clone()),
                 }
             }
         }
@@ -505,6 +568,7 @@ impl StreamTarget {
                 name: output.name.clone(),
             },
             StreamTarget::Window { id } => StreamTargetId::Window { id: *id },
+            StreamTarget::Virtual { name } => StreamTargetId::Virtual { name: name.clone() },
         }
     }
 }

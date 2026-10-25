@@ -4932,7 +4932,16 @@ impl Niri {
             }
 
             // Render.
-            res = backend.render(self, output, target_presentation_time);
+            res = if crate::virtual_output::is_virtual(output) {
+                // Virtual outputs have no display; only their screencasts are rendered below.
+                backend
+                    .with_primary_renderer(|renderer| {
+                        self.render_offscreen(renderer, output, target_presentation_time)
+                    })
+                    .unwrap_or(RenderResult::Skipped)
+            } else {
+                backend.render(self, output, target_presentation_time)
+            };
         }
 
         let is_locked = self.is_locked();

@@ -131,6 +131,22 @@ impl State {
         match msg {
             PwToNiri::StopCast { session_id } => self.niri.stop_cast(session_id),
             PwToNiri::Redraw { stream_id } => self.redraw_cast(stream_id),
+            PwToNiri::ResizeOutput { stream_id, size } => {
+                let output = self
+                    .niri
+                    .casting
+                    .casts
+                    .iter()
+                    .find(|cast| cast.stream_id == stream_id && cast.flexible_size)
+                    .and_then(|cast| match &cast.target {
+                        CastTarget::Output { output, .. } => output.upgrade(),
+                        _ => None,
+                    });
+                if let Some(output) = output {
+                    let size = Size::from((size.w as i32, size.h as i32));
+                    self.niri.resize_virtual_output(&output, size);
+                }
+            }
             PwToNiri::FatalError => {
                 warn!("stopping PipeWire due to fatal error");
                 let casting = &mut self.niri.casting;
@@ -376,6 +392,7 @@ impl State {
                 size,
                 refresh,
                 alpha,
+                false,
                 pending.cursor_mode,
                 pending.signal_ctx,
             );
@@ -408,7 +425,17 @@ impl State {
                 let _span = tracy_client::span!("StartCast");
                 let _span = debug_span!("StartCast", %session_id, %stream_id).entered();
 
+                // Created for RecordVirtual; removed again if starting the cast fails.
+                let mut virtual_output = None;
+
                 let (target, size, refresh, alpha) = match target {
+                    StreamTargetId::Virtual { name } => {
+                        let output = self.niri.add_virtual_output(&name);
+                        let (size, refresh) = cast_params_for_output(&output);
+                        let target = CastTarget::output(&output);
+                        virtual_output = Some(output);
+                        (target, size, refresh, false)
+                    }
                     StreamTargetId::Output { name } => {
                         let global_space = &self.niri.global_space;
                         let output = global_space.outputs().find(|out| out.name() == name);
@@ -447,6 +474,9 @@ impl State {
                     Ok(x) => x,
                     Err(err) => {
                         warn!("error starting screencast: {err:?}");
+                        if let Some(output) = virtual_output {
+                            self.niri.remove_virtual_output(&output);
+                        }
                         self.niri.stop_cast(session_id);
                         return;
                     }
@@ -461,6 +491,7 @@ impl State {
                     size,
                     refresh,
                     alpha,
+                    virtual_output.is_some(),
                     cursor_mode,
                     signal_ctx,
                 );
@@ -470,6 +501,9 @@ impl State {
                     }
                     Err(err) => {
                         warn!("error starting screencast: {err:?}");
+                        if let Some(output) = virtual_output {
+                            self.niri.remove_virtual_output(&output);
+                        }
                         self.niri.stop_cast(session_id);
                     }
                 }
@@ -732,6 +766,8 @@ impl Niri {
             .pending_dynamic_casts
             .retain(|p| p.session_id != session_id);
 
+        // Removing an output stops its casts, so do that after we're done with the list.
+        let mut virtual_outputs = vec![];
         for i in (0..self.casting.casts.len()).rev() {
             let cast = &self.casting.casts[i];
             if cast.session_id != session_id {
@@ -742,6 +778,10 @@ impl Niri {
             if let Err(err) = cast.stream.disconnect() {
                 warn!("error disconnecting stream: {err:?}");
             }
+            virtual_outputs.extend(cast_virtual_output(&cast));
+        }
+        for output in virtual_outputs {
+            self.remove_virtual_output(&output);
         }
 
         let dbus = &self.dbus.as_ref().unwrap();
@@ -776,6 +816,9 @@ impl Niri {
             let cast = self.casting.casts.swap_remove(pos);
             if let Err(err) = cast.stream.disconnect() {
                 warn!("error disconnecting stream: {err:?}");
+            }
+            if let Some(output) = cast_virtual_output(&cast) {
+                self.remove_virtual_output(&output);
             }
         }
     }
@@ -823,6 +866,17 @@ impl Niri {
             .to_physical_precise_up(scale);
         let refresh = output.current_mode().unwrap().refresh as u32;
         Some((bbox.size, refresh))
+    }
+}
+
+/// The virtual output that a cast was created for (`RecordVirtual`).
+fn cast_virtual_output(cast: &Cast) -> Option<Output> {
+    if !cast.flexible_size {
+        return None;
+    }
+    match &cast.target {
+        CastTarget::Output { output, .. } => output.upgrade(),
+        _ => None,
     }
 }
 
