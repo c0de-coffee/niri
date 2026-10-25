@@ -28,6 +28,14 @@ pub trait NiriInputDevice: input::Device {
     fn absolute_position_is_global(&self) -> bool {
         false
     }
+
+    /// For devices that send wheel scrolling as plain deltas without discrete (v120) steps: the
+    /// delta that one wheel notch corresponds to.
+    ///
+    /// Wheel bindings need the discrete steps, so they get synthesized from this.
+    fn delta_per_wheel_notch(&self) -> Option<f64> {
+        None
+    }
 }
 
 /// Remote desktop (EIS) devices send absolute positions in the global logical coordinates of
@@ -39,6 +47,12 @@ impl NiriInputDevice for smithay::reexports::reis::request::Device {
 
     fn absolute_position_is_global(&self) -> bool {
         true
+    }
+
+    // gnome-remote-desktop turns each RDP wheel notch into a scroll delta of 10, without a
+    // discrete event (the same step that mutter/clutter use).
+    fn delta_per_wheel_notch(&self) -> Option<f64> {
+        Some(10.)
     }
 }
 

@@ -3178,8 +3178,18 @@ impl State {
 
         let timestamp = Duration::from_micros(event.time().micros());
 
-        let horizontal_amount_v120 = event.amount_v120(Axis::Horizontal);
-        let vertical_amount_v120 = event.amount_v120(Axis::Vertical);
+        let mut horizontal_amount_v120 = event.amount_v120(Axis::Horizontal);
+        let mut vertical_amount_v120 = event.amount_v120(Axis::Vertical);
+
+        // Synthesize discrete steps for devices that only send deltas for the wheel (remote
+        // desktop), so that wheel bindings work.
+        if horizontal_amount_v120.is_none() && vertical_amount_v120.is_none() {
+            if let Some(notch) = event.device().delta_per_wheel_notch() {
+                let to_v120 = |amount: f64| amount / notch * 120.;
+                horizontal_amount_v120 = event.amount(Axis::Horizontal).map(to_v120);
+                vertical_amount_v120 = event.amount(Axis::Vertical).map(to_v120);
+            }
+        }
 
         let mut horizontal_amount = event.amount(Axis::Horizontal).unwrap_or_else(|| {
             // Winit backend, discrete scrolling.
