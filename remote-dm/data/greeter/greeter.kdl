@@ -22,10 +22,10 @@ layout {
     border { off; }
 }
 
-// Debug output of gnome-remote-desktop's handover daemon (ends up in the journal).
-environment {
-    G_MESSAGES_DEBUG "all"
-}
+// Debug output of gnome-remote-desktop's handover daemon (ends up in the journal):
+// environment {
+//     G_MESSAGES_DEBUG "all"
+// }
 
 hotkey-overlay {
     skip-at-startup

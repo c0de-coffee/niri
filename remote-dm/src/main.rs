@@ -16,9 +16,12 @@
 //!    once. The greeter's grd calls `Logout`, which ends the greeter session.
 //! 4. When the user session ends, its display object goes away.
 
+mod config;
 mod display;
 mod greeter_ipc;
 mod logind;
+// Copied from greetd as is, including a few methods we don't use.
+#[allow(dead_code)]
 mod pam;
 mod scrambler;
 mod session;
@@ -37,51 +40,45 @@ use crate::greeter_ipc::{ErrorType, GreeterRequest, Request, Response};
 use crate::session::{Session, SessionKey};
 use crate::worker::{WorkerEvent, WorkerInput, WorkerRequest};
 
-struct Config {
+struct Args {
     /// --session-bus: serve on the session bus, for trying things out without root.
     session_bus: bool,
-    /// Greeter sessions run as system users named with this prefix, one per remote display at a
-    /// time (`rdm-greeter-1`, `rdm-greeter-2`, ...): concurrent sessions of the same user would
-    /// share its session bus and systemd user instance.
-    greeter_user_prefix: String,
-    /// PAM service for greeter sessions.
-    greeter_service: String,
-    /// Greeter session command: a compositor running the greeter and `grd --handover`.
-    greeter_command: String,
-    /// PAM service for user sessions.
-    user_service: String,
-    /// User session command. The greeter's command is ignored: it's meant for local sessions,
-    /// while remote ones have to be headless and run `grd --handover`.
-    user_command: String,
+    config: config::Config,
 }
 
-impl Config {
-    fn from_args() -> anyhow::Result<Self> {
-        let mut config = Self {
-            session_bus: false,
-            greeter_user_prefix: "rdm-greeter-".to_owned(),
-            greeter_service: "remote-dm-greeter".to_owned(),
-            greeter_command: "niri --headless --session -c /etc/remote-dm/greeter.kdl".to_owned(),
-            user_service: "remote-dm".to_owned(),
-            user_command: "/usr/lib/gnome-remote-desktop-daemon --handover & \
-                           exec niri --headless --session"
-                .to_owned(),
-        };
+impl Args {
+    fn parse() -> anyhow::Result<Self> {
+        let mut session_bus = false;
+        let mut config_path = None;
 
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
-            let mut value = || args.next().with_context(|| format!("{arg} needs a value"));
             match arg.as_str() {
-                "--session-bus" => config.session_bus = true,
-                "--greeter-user-prefix" => config.greeter_user_prefix = value()?,
-                "--greeter-service" => config.greeter_service = value()?,
-                "--greeter-command" => config.greeter_command = value()?,
-                "--user-service" => config.user_service = value()?,
-                "--user-command" => config.user_command = value()?,
+                "--session-bus" => session_bus = true,
+                "--config" => {
+                    config_path = Some(args.next().context("--config needs a path")?);
+                }
+                "--help" | "-h" => {
+                    println!(
+                        "usage: remote-dm [--config PATH] [--session-bus]\n\
+                         \n\
+                         Display manager for remote logins with gnome-remote-desktop.\n\
+                         Config: {} (optional).",
+                        config::DEFAULT_PATH
+                    );
+                    std::process::exit(0);
+                }
                 _ => anyhow::bail!("unknown argument: {arg}"),
             }
         }
-        Ok(config)
+
+        let explicit = config_path.is_some();
+        let path = config_path.unwrap_or_else(|| config::DEFAULT_PATH.to_owned());
+        let config = config::Config::load(std::path::Path::new(&path), explicit)?;
+        Ok(Self {
+            session_bus,
+            config,
+        })
     }
 }
 
@@ -136,7 +133,8 @@ struct Remote {
 }
 
 struct State {
-    config: Config,
+    session_bus: bool,
+    config: config::Config,
     conn: zbus::Connection,
     displays: Displays,
     remotes: HashMap<u64, Remote>,
@@ -162,25 +160,30 @@ fn main() -> anyhow::Result<()> {
         return session_manager::main();
     }
 
-    let config = Config::from_args()?;
+    let args = Args::parse()?;
 
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
-        .block_on(run(config))
+        .block_on(run(args))
 }
 
-async fn run(config: Config) -> anyhow::Result<()> {
+async fn run(args: Args) -> anyhow::Result<()> {
+    let Args {
+        session_bus,
+        config,
+    } = args;
+
     let (requests_tx, mut requests) = mpsc::unbounded_channel();
     let (session_events_tx, mut session_events) = mpsc::unbounded_channel();
     let (greeter_requests_tx, mut greeter_requests) = mpsc::unbounded_channel();
 
-    let builder = if config.session_bus {
+    let builder = if session_bus {
         zbus::connection::Builder::session()?
     } else {
         zbus::connection::Builder::system()?
     };
-    let extra_allowed_uid = config.session_bus.then(nix::unistd::getuid).map(|uid| uid.as_raw());
+    let extra_allowed_uid = session_bus.then(nix::unistd::getuid).map(|uid| uid.as_raw());
     let conn = builder
         .serve_at(FACTORY_PATH, Factory::new(requests_tx, extra_allowed_uid))?
         .serve_at(DISPLAYS_PATH, zbus::fdo::ObjectManager)?
@@ -191,6 +194,7 @@ async fn run(config: Config) -> anyhow::Result<()> {
     tracing::info!("serving {BUS_NAME}");
 
     let mut state = State {
+        session_bus,
         config,
         displays: Displays::new(conn.clone()),
         conn,
@@ -237,13 +241,13 @@ impl State {
             .values()
             .map(|r| r.greeter_user.as_str())
             .collect();
-        let free = greeter_users(&self.config.greeter_user_prefix)
+        let free = greeter_users(&self.config.greeter.user_prefix)
             .into_iter()
             .find(|(name, _)| !in_use.contains(&name.as_str()));
         let Some((greeter_user, greeter_uid)) = free else {
             tracing::warn!(
                 "no free greeter user (all {}* in use), refusing connection",
-                self.config.greeter_user_prefix
+                self.config.greeter.user_prefix
             );
             return;
         };
@@ -257,7 +261,7 @@ impl State {
         };
 
         let remote_key = self.next_key();
-        let socket = if self.config.session_bus {
+        let socket = if self.session_bus {
             None
         } else {
             match greeter_ipc::listen(remote_key, greeter_uid, self.greeter_requests.clone()) {
@@ -275,11 +279,11 @@ impl State {
             env.push(format!("GREETD_SOCK={}", socket.path().display()));
         }
         let greeter_request = WorkerRequest {
-            service: self.config.greeter_service.clone(),
+            service: self.config.greeter.pam_service.clone(),
             user: greeter_user.clone(),
             class: "greeter".to_owned(),
             rhost: request.hostname.clone(),
-            command: Some(self.config.greeter_command.clone()),
+            command: Some(self.config.greeter.command.clone()),
             env,
         };
 
@@ -458,7 +462,7 @@ impl State {
                 }
 
                 let worker_request = WorkerRequest {
-                    service: self.config.user_service.clone(),
+                    service: self.config.session.pam_service.clone(),
                     user: username.clone(),
                     class: "user".to_owned(),
                     rhost: remote.request.hostname.clone(),
@@ -528,7 +532,7 @@ impl State {
                 let login = remote.login.as_mut().unwrap();
                 tracing::debug!(remote = remote_key, ?cmd, "ignoring the greeter's session command");
                 let input = WorkerInput::Start {
-                    command: self.config.user_command.clone(),
+                    command: self.config.session.command.clone(),
                     env,
                 };
                 match login.session.send(&input).await {
@@ -613,7 +617,7 @@ impl State {
             .is_some_and(|login| login.state == LoginState::Started);
 
         // Kill whatever the greeter user still has running, so the next greeter starts clean.
-        if !self.config.session_bus {
+        if !self.session_bus {
             logind::terminate_user(&self.conn, uid).await;
         }
 

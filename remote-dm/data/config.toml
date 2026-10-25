@@ -1,0 +1,23 @@
+# remote-dm configuration: /etc/remote-dm/config.toml
+# Everything is optional; these are the defaults.
+
+[greeter]
+# Greeter sessions run as system users with this name prefix, one per remote connection at the
+# login screen (concurrent sessions of one user would share its session bus). The number of
+# such users is how many connections can be at the login screen at once.
+# user-prefix = "rdm-greeter-"
+
+# PAM service for greeter sessions (/etc/pam.d/remote-dm-greeter).
+# pam-service = "remote-dm-greeter"
+
+# Runs in greeter sessions: a headless compositor that starts grd --handover, a greetd greeter
+# and `remote-dm session-manager`.
+# command = "niri --headless --session -c /etc/remote-dm/greeter.kdl"
+
+[session]
+# PAM service for user sessions (/etc/pam.d/remote-dm).
+# pam-service = "remote-dm"
+
+# Runs in user sessions: a headless compositor and grd --handover. The session the greeter
+# picks is ignored, it's meant for local sessions.
+# command = "/usr/lib/gnome-remote-desktop-daemon --handover & exec niri --headless --session"

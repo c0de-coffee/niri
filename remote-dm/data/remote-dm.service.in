@@ -1,0 +1,17 @@
+[Unit]
+Description=Remote login display manager for gnome-remote-desktop
+# Both own org.gnome.DisplayManager on the system bus.
+Conflicts=gdm.service
+After=systemd-user-sessions.service dbus.service
+
+[Service]
+Type=dbus
+BusName=org.gnome.DisplayManager
+ExecStart=@BINDIR@/remote-dm
+Restart=on-failure
+# Greeter sockets (GREETD_SOCK).
+RuntimeDirectory=remote-dm
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target
