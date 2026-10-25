@@ -1650,6 +1650,35 @@ impl<W: LayoutElement> Layout<W> {
         Some(&monitors[*active_monitor_idx].output)
     }
 
+    /// Like `Workspace::resolve_default_width()`, for when there's no workspace (no outputs).
+    pub fn resolve_default_width(
+        &self,
+        default_width: Option<Option<PresetSize>>,
+        is_floating: bool,
+    ) -> Option<PresetSize> {
+        match default_width {
+            Some(Some(width)) => Some(width),
+            Some(None) => None,
+            None if is_floating => None,
+            None => self.options.layout.default_column_width,
+        }
+    }
+
+    /// Like `Workspace::resolve_default_height()`, for when there's no workspace (no outputs).
+    pub fn resolve_default_height(
+        &self,
+        default_height: Option<Option<PresetSize>>,
+        is_floating: bool,
+    ) -> Option<PresetSize> {
+        match default_height {
+            Some(Some(height)) => Some(height),
+            Some(None) => None,
+            None if is_floating => None,
+            // We don't have a global default at the moment.
+            None => None,
+        }
+    }
+
     pub fn active_workspace(&self) -> Option<&Workspace<W>> {
         let MonitorSet::Normal {
             monitors,

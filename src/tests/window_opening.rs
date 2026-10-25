@@ -30,10 +30,12 @@ fn simple_no_workspaces() {
     window.ack_last_and_commit();
     f.double_roundtrip(id);
 
+    // The default column width applies even though there was no workspace at the initial
+    // configure (the window doesn't keep the size it picked for itself).
     let window = f.client(id).window(&surface);
     assert_snapshot!(
         window.format_recent_configures(),
-        @"size: 100 × 688, bounds: 1248 × 688, states: []"
+        @"size: 616 × 688, bounds: 1248 × 688, states: []"
     );
 }
 

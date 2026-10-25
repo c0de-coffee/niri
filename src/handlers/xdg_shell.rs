@@ -1156,10 +1156,10 @@ impl State {
             .map(|(mon, _)| mon.output().clone());
         let mon = mon.map(|(mon, _)| mon);
 
-        let mut width = None;
-        let mut floating_width = None;
-        let mut height = None;
-        let mut floating_height = None;
+        let width;
+        let floating_width;
+        let height;
+        let floating_height;
         let is_full_width = rules.open_maximized.unwrap_or(false);
         let is_floating = rules.compute_open_floating(toplevel);
 
@@ -1211,6 +1211,16 @@ impl State {
                 is_floating,
                 &rules,
             );
+        } else {
+            // No workspace yet: there are no outputs (e.g. a headless session before a remote
+            // desktop client brings a virtual output). There's nothing to size the window against
+            // now, but resolve the default sizes anyway, so that it gets them once it's mapped on
+            // an output instead of keeping whatever size it picked for itself.
+            let layout = &self.niri.layout;
+            width = layout.resolve_default_width(rules.default_width, false);
+            floating_width = layout.resolve_default_width(rules.default_width, true);
+            height = layout.resolve_default_height(rules.default_height, false);
+            floating_height = layout.resolve_default_height(rules.default_height, true);
         }
 
         // Set the tiled state for the initial configure.
