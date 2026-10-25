@@ -1,3 +1,22 @@
+> [!NOTE]
+> **This is a fork** of [niri](https://github.com/niri-wm/niri) by Ivan Molodetskikh (YaLTeR), maintained by
+> [c0de-coffee](https://github.com/c0de-coffee). Below this note is the original README.
+>
+> The `remote-desktop` branch adds GNOME-style RDP remote login with an unmodified
+> gnome-remote-desktop:
+>
+> - niri implements mutter's `org.gnome.Mutter.RemoteDesktop` (input through libei, clipboard) and
+>   `ScreenCast.RecordVirtual` (virtual outputs that follow the client's size), and `--headless`
+>   runs with a GPU and no outputs.
+> - [`remote-dm/`](remote-dm/README.md) is a display manager just for remote logins: it stands in for
+>   GDM towards gnome-remote-desktop and speaks greetd's protocol towards greeters. Each connection
+>   gets a login screen, then the user's own headless niri session, which survives disconnects.
+> - Arch packages: [`packaging/`](packaging/) (`niri-remote-desktop-git`, `remote-dm-git`).
+>   [Nyxuri-remote](https://github.com/c0de-coffee/Nyxuri-remote) sets everything up as its
+>   `remote-login` unit.
+>
+> None of this is upstream; report problems with it here, not to niri.
+
 <h1 align="center"><img alt="niri" src="https://github.com/user-attachments/assets/07d05cd0-d5dc-4a28-9a35-51bae8f119a0"></h1>
 <p align="center">A scrollable-tiling Wayland compositor.</p>
 <p align="center">
