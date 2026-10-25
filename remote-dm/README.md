@@ -33,6 +33,16 @@ existing one.
 
 ## Installing
 
+On Arch, build the packages in `packaging/` of this repository (they build the committed
+`remote-desktop` branch): `remote-dm-git`, and `niri-remote-desktop-git` for a niri with remote
+desktop support.
+
+```sh
+cd packaging/remote-dm-git && makepkg -si
+```
+
+Otherwise:
+
 ```sh
 ./install.sh            # builds, then installs to /usr and /etc (as root)
 DESTDIR=pkg ./install.sh  # for packaging
@@ -74,7 +84,7 @@ regreet; to use Noctalia Greeter instead (its client, without its own compositor
 
 ```toml
 [greeter]
-command = "niri --headless --session -c /etc/remote-dm/greeter-noctalia.kdl"
+command = "exec niri --headless --session -c /etc/remote-dm/greeter-noctalia.kdl"
 ```
 
 Single sign-on needs a Kerberos realm and a keytab for grd's `TERMSRV/<host>` principal:
