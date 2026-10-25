@@ -56,13 +56,23 @@ Installed files:
 | `/usr/share/dbus-1/system.d/org.gnome.DisplayManager.conf` | only root may own the name, only grd's system user may call it |
 | `/etc/pam.d/remote-dm`, `/etc/pam.d/remote-dm-greeter` | PAM services for user and greeter sessions |
 | `/etc/remote-dm/config.toml` | configuration (all optional) |
-| `/etc/remote-dm/greeter.kdl` | niri config of greeter sessions |
+| `/etc/remote-dm/greeter.kdl` | niri config of greeter sessions (regreet) |
+| `/etc/remote-dm/greeter-noctalia.kdl` | the same with [Noctalia Greeter](https://github.com/noctalia-dev/noctalia-greeter) |
 
 ## Configuration
 
-See `data/config.toml` for all options and their defaults. Each greeter user allows one
-connection at the login screen at a time (concurrent sessions of one user would share its session
-bus); add more to `sysusers.d/remote-dm.conf` for more.
+See `data/config.toml` for all options and their defaults.
+
+Any greetd greeter that runs as a plain Wayland client works. The default greeter config starts
+regreet; to use Noctalia Greeter instead (its client, without its own compositor):
+
+```toml
+[greeter]
+command = "niri --headless --session -c /etc/remote-dm/greeter-noctalia.kdl"
+```
+
+Each greeter user allows one connection at the login screen at a time (concurrent sessions of one
+user would share its session bus); add more to `sysusers.d/remote-dm.conf` for more.
 
 ## License
 

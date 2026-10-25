@@ -1,0 +1,34 @@
+// niri config for remote-dm greeter sessions, with Noctalia Greeter.
+// Runs gnome-remote-desktop's handover daemon, which takes over the RDP connection.
+
+spawn-at-startup "/usr/lib/gnome-remote-desktop-daemon" "--handover"
+
+// Stands in for gnome-session's Logout, which grd calls to end the greeter when the RDP
+// session ends.
+spawn-at-startup "remote-dm" "session-manager"
+
+// The greeter: Noctalia Greeter's client, without its own compositor (niri is the compositor
+// here, since it can serve the remote desktop). Install noctalia-greeter and point
+// [greeter] command in config.toml at this file.
+spawn-at-startup "noctalia-greeter"
+
+// The greeter is the only window; fill the screen with it. The session starts without outputs
+// (the RDP client brings a virtual one), so the greeter usually opens before there is an output.
+// A full-width column then fills the screen once the window lands on it (proportions are
+// recomputed per output). Don't use open-fullscreen: opened without an output, niri can't
+// fullscreen the window and leaves it at its minimum width instead.
+layout {
+    gaps 0
+    default-column-width { proportion 1.0; }
+    focus-ring { off; }
+    border { off; }
+}
+
+// Debug output of gnome-remote-desktop's handover daemon (ends up in the journal):
+// environment {
+//     G_MESSAGES_DEBUG "all"
+// }
+
+hotkey-overlay {
+    skip-at-startup
+}

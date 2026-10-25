@@ -13,6 +13,9 @@
 # Runs in greeter sessions: a headless compositor that starts grd --handover, a greetd greeter
 # and `remote-dm session-manager`.
 # command = "niri --headless --session -c /etc/remote-dm/greeter.kdl"
+#
+# With Noctalia Greeter instead of regreet:
+# command = "niri --headless --session -c /etc/remote-dm/greeter-noctalia.kdl"
 
 [session]
 # PAM service for user sessions (/etc/pam.d/remote-dm).

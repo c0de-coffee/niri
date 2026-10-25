@@ -45,6 +45,7 @@ install_conf data/pam.d/remote-dm "$SYSCONFDIR/pam.d/remote-dm"
 install_conf data/pam.d/remote-dm-greeter "$SYSCONFDIR/pam.d/remote-dm-greeter"
 install_conf data/config.toml "$SYSCONFDIR/remote-dm/config.toml"
 install_conf data/greeter/greeter.kdl "$SYSCONFDIR/remote-dm/greeter.kdl"
+install_conf data/greeter/greeter-noctalia.kdl "$SYSCONFDIR/remote-dm/greeter-noctalia.kdl"
 
 if [ -z "$D" ]; then
   systemd-sysusers remote-dm.conf
