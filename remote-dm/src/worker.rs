@@ -39,7 +39,8 @@ pub struct WorkerRequest {
     pub class: String,
     /// Remote host, for `PAM_RHOST`; this also makes the logind session remote.
     pub rhost: Option<String>,
-    /// Run with `sh -c` as the user. `None`: wait for `WorkerInput::Start` after authenticating.
+    /// Run with `sh -c` as the user; it should `exec` its last step, so signals reach it. `None`:
+    /// wait for `WorkerInput::Start` after authenticating.
     pub command: Option<String>,
     /// Extra environment for PAM and the session (`KEY=VALUE`).
     pub env: Vec<String>,
@@ -279,7 +280,9 @@ fn run() -> anyhow::Result<i32> {
     let args = [
         shell.clone(),
         CString::new("-c")?,
-        CString::new(format!("exec {command}"))?,
+        // As is: prefixing "exec" would only replace the shell with the first command of a list
+        // like "systemctl --user start ...; exec niri". Commands exec their last step themselves.
+        CString::new(command)?,
     ];
     let user_name = CString::new(user.name.clone())?;
     let home = user.dir.clone();

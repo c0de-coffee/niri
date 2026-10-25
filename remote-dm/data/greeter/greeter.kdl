@@ -1,7 +1,8 @@
 // niri config for remote-dm greeter sessions.
-// Runs gnome-remote-desktop's handover daemon, which takes over the RDP connection.
+// Runs gnome-remote-desktop's handover daemon, which takes over the RDP connection. It's the
+// systemd user service grd ships (GNOME starts it with gnome-session), restarted if it crashes.
 
-spawn-at-startup "/usr/lib/gnome-remote-desktop-daemon" "--handover"
+spawn-at-startup "systemctl" "--user" "start" "gnome-remote-desktop-handover.service"
 
 // Stands in for gnome-session's Logout, which grd calls to end the greeter when the RDP
 // session ends.
@@ -24,10 +25,10 @@ layout {
     border { off; }
 }
 
-// Debug output of gnome-remote-desktop's handover daemon (ends up in the journal):
-// environment {
-//     G_MESSAGES_DEBUG "all"
-// }
+// Debug output of gnome-remote-desktop's handover daemon: in a drop-in for the user service
+// (systemctl --user edit gnome-remote-desktop-handover.service as the greeter user, or
+// /etc/systemd/user/gnome-remote-desktop-handover.service.d/), set
+// Environment=G_MESSAGES_DEBUG=all.
 
 hotkey-overlay {
     skip-at-startup

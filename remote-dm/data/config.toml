@@ -12,10 +12,10 @@
 
 # Runs in greeter sessions: a headless compositor that starts grd --handover, a greetd greeter
 # and `remote-dm session-manager`.
-# command = "niri --headless --session -c /etc/remote-dm/greeter.kdl"
+# command = "exec niri --headless --session -c /etc/remote-dm/greeter.kdl"
 #
 # With Noctalia Greeter instead of regreet:
-# command = "niri --headless --session -c /etc/remote-dm/greeter-noctalia.kdl"
+# command = "exec niri --headless --session -c /etc/remote-dm/greeter-noctalia.kdl"
 
 [session]
 # PAM service for user sessions (/etc/pam.d/remote-dm).
@@ -28,4 +28,4 @@
 
 # Runs in user sessions: a headless compositor and grd --handover. The session the greeter
 # picks is ignored, it's meant for local sessions.
-# command = "/usr/lib/gnome-remote-desktop-daemon --handover & exec niri --headless --session"
+# command = "systemctl --user start gnome-remote-desktop-handover.service; exec niri --headless --session"

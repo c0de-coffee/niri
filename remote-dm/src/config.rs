@@ -58,7 +58,7 @@ impl Default for Greeter {
         Self {
             user_prefix: "rdm-greeter-".to_owned(),
             pam_service: "remote-dm-greeter".to_owned(),
-            command: "niri --headless --session -c /etc/remote-dm/greeter.kdl".to_owned(),
+            command: "exec niri --headless --session -c /etc/remote-dm/greeter.kdl".to_owned(),
         }
     }
 }
@@ -68,7 +68,7 @@ impl Default for UserSession {
         Self {
             pam_service: "remote-dm".to_owned(),
             preauthenticated_pam_service: "remote-dm-autologin".to_owned(),
-            command: "/usr/lib/gnome-remote-desktop-daemon --handover & \
+            command: "systemctl --user start gnome-remote-desktop-handover.service; \
                       exec niri --headless --session"
                 .to_owned(),
         }
