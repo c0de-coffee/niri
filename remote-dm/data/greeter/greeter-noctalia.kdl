@@ -10,7 +10,9 @@ spawn-at-startup "remote-dm" "session-manager"
 // The greeter: Noctalia Greeter's client, without its own compositor (niri is the compositor
 // here, since it can serve the remote desktop). Install noctalia-greeter and point
 // [greeter] command in config.toml at this file.
-spawn-at-startup "noctalia-greeter"
+// Restarted if it crashes, so the remote user isn't left with an empty screen. After a login
+// it exits successfully and stays gone.
+spawn-sh-at-startup "until noctalia-greeter; do sleep 1; done"
 
 // The greeter is the only window; fill the screen with it. The session starts without outputs
 // (the RDP client brings a virtual one), so the greeter usually opens before there is an output.

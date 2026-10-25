@@ -28,8 +28,10 @@ impl Session {
         key: SessionKey,
         events: mpsc::UnboundedSender<Event>,
     ) -> anyhow::Result<Self> {
-        let exe = std::env::current_exe().context("error finding our executable")?;
-        let mut child = Command::new(exe)
+        // Run the binary we are, even if it was replaced or removed since we started (e.g. a
+        // package update before the service was restarted): in the forked child, /proc/self/exe
+        // still is our binary. This also keeps the worker at the same version as the daemon.
+        let mut child = Command::new("/proc/self/exe")
             .arg("session-worker")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

@@ -8,7 +8,9 @@ spawn-at-startup "/usr/lib/gnome-remote-desktop-daemon" "--handover"
 spawn-at-startup "remote-dm" "session-manager"
 
 // The greeter: any greetd greeter works, remote-dm speaks greetd's IPC (GREETD_SOCK).
-spawn-at-startup "regreet"
+// Restarted if it crashes, so the remote user isn't left with an empty screen. After a login
+// it exits successfully and stays gone.
+spawn-sh-at-startup "until regreet; do sleep 1; done"
 
 // The greeter is the only window; fill the screen with it. The session starts without outputs
 // (the RDP client brings a virtual one), so the greeter usually opens before there is an output.
