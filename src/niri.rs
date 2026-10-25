@@ -124,7 +124,7 @@ use wayland_server::protocol::wl_output::WlOutput;
 use crate::a11y::A11y;
 use crate::animation::Clock;
 use crate::backend::tty::SurfaceDmabufFeedback;
-use crate::backend::{Backend, Headless, RenderResult, Tty, Winit};
+use crate::backend::{Backend, Headless, IpcOutputMap, RenderResult, Tty, Winit};
 use crate::cursor::{CursorManager, CursorTextureCache, RenderCursor, XCursor};
 #[cfg(feature = "dbus")]
 use crate::dbus::freedesktop_locale1::Locale1ToNiri;
@@ -460,6 +460,8 @@ pub struct Niri {
 
     pub ipc_server: Option<IpcServer>,
     pub ipc_outputs_changed: bool,
+    /// The backend's IPC output list, which virtual outputs add themselves to.
+    pub ipc_outputs: Arc<Mutex<IpcOutputMap>>,
 
     pub satellite: Option<Satellite>,
 
@@ -2215,7 +2217,9 @@ impl State {
         #[cfg(feature = "xdp-gnome-screencast")]
         self.niri.update_eis_regions();
 
-        let new_config = self.backend.ipc_outputs().lock().unwrap().clone();
+        let mut new_config = self.backend.ipc_outputs().lock().unwrap().clone();
+        // Their mode follows the screencast, so there's nothing to manage.
+        new_config.retain(|id, _| !self.niri.is_virtual_output_id(*id));
         self.niri.output_management_state.notify_changes(new_config);
     }
 
@@ -2918,6 +2922,7 @@ impl Niri {
 
             ipc_server,
             ipc_outputs_changed: false,
+            ipc_outputs: backend.ipc_outputs(),
 
             satellite: None,
 

@@ -133,7 +133,9 @@ impl Winit {
 
                     {
                         let mut ipc_outputs = winit.ipc_outputs.lock().unwrap();
-                        let output = ipc_outputs.values_mut().next().unwrap();
+                        // Not the first one: there may be virtual outputs too.
+                        let name = output.name();
+                        let output = ipc_outputs.values_mut().find(|o| o.name == name).unwrap();
                         let mode = &mut output.modes[0];
                         mode.width = size.w.clamp(0, u16::MAX as i32) as u16;
                         mode.height = size.h.clamp(0, u16::MAX as i32) as u16;

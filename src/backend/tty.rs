@@ -2252,6 +2252,8 @@ impl Tty {
         }
 
         let mut guard = self.ipc_outputs.lock().unwrap();
+        // Virtual outputs aren't ours; keep them.
+        ipc_outputs.extend(guard.drain().filter(|(id, _)| niri.is_virtual_output_id(*id)));
         *guard = ipc_outputs;
         niri.ipc_outputs_changed = true;
     }
