@@ -11,13 +11,10 @@ spawn-at-startup "remote-dm" "session-manager"
 spawn-at-startup "regreet"
 
 // The greeter is the only window; fill the screen with it. The session starts without outputs
-// (the RDP client brings a virtual one), so the greeter usually opens before there is anything
-// to fullscreen on: a full-width column covers that, since proportions are recomputed when the
-// window lands on the output.
-window-rule {
-    open-fullscreen true
-}
-
+// (the RDP client brings a virtual one), so the greeter usually opens before there is an output.
+// A full-width column then fills the screen once the window lands on it (proportions are
+// recomputed per output). Don't use open-fullscreen: opened without an output, niri can't
+// fullscreen the window and leaves it at its minimum width instead.
 layout {
     gaps 0
     default-column-width { proportion 1.0; }
