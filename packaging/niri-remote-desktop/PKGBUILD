@@ -1,0 +1,85 @@
+# Maintainer: c0de-coffee <53132135+c0de-coffee@users.noreply.github.com>
+#
+# niri with remote desktop support (org.gnome.Mutter.RemoteDesktop, virtual outputs), for
+# GNOME-style RDP remote login with gnome-remote-desktop and remote-dm. Built from a release tag
+# of https://github.com/c0de-coffee/niri (remote-desktop branch). Based on Arch's niri PKGBUILD.
+
+pkgname=niri-remote-desktop
+_tag=v26.04-rd1
+pkgver=26.04.rd1
+pkgrel=1
+pkgdesc="A scrollable-tiling Wayland compositor (with remote desktop support)"
+arch=(x86_64)
+url="https://github.com/c0de-coffee/niri"
+license=(GPL-3.0-or-later)
+depends=(
+  cairo
+  glib2
+  glibc
+  libdisplay-info
+  libgcc
+  libinput
+  libpipewire
+  libxkbcommon
+  mesa
+  pango
+  pixman
+  seatd
+  systemd-libs
+  xdg-desktop-portal-impl
+)
+makedepends=(
+  clang
+  git
+  rust
+)
+optdepends=(
+  'bash: for niri-session script'
+  'xwayland-satellite: for running X11 apps in XWayland'
+  'xdg-desktop-portal-gnome: a XDG desktop portal required for screencasting'
+  'gnome-remote-desktop: remote desktop and remote login over RDP'
+  'remote-dm: remote login with a login screen and independent sessions'
+)
+provides=(niri wayland-compositor)
+conflicts=(niri niri-remote-desktop-git)
+source=("niri-$_tag.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
+sha256sums=('63a44681daec1f0eae526eb0302aba4238bd78143022fa155be1fac5774412bd')
+
+_srcdir() {
+  printf 'niri-%s' "${_tag#v}"
+}
+
+prepare() {
+  cd "$(_srcdir)"
+  cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+  cd "$(_srcdir)"
+  export NIRI_BUILD_COMMIT="$(zcat "$srcdir/niri-$_tag.tar.gz" | git get-tar-commit-id | cut -c1-7)"
+  CFLAGS+=' -ffat-lto-objects'
+  cargo build --frozen --release --features default
+
+  for shell in bash fish zsh; do
+    target/release/niri completions "$shell" > "$shell-completions"
+  done
+}
+
+check() {
+  cd "$(_srcdir)"
+  export XDG_RUNTIME_DIR="$(mktemp -d)"
+  export RAYON_NUM_THREADS=1
+  cargo test --all --exclude niri-visual-tests --frozen
+}
+
+package() {
+  cd "$(_srcdir)"
+  install -vDm 755 target/release/niri resources/niri-session -t "$pkgdir/usr/bin/"
+  install -vDm 644 resources/niri{.service,-shutdown.target} -t "$pkgdir/usr/lib/systemd/user/"
+  install -vDm 644 resources/niri.desktop -t "$pkgdir/usr/share/wayland-sessions/"
+  install -vDm 644 resources/niri-portals.conf -t "$pkgdir/usr/share/xdg-desktop-portal/"
+  install -vDm 644 resources/default-config.kdl README.md -t "$pkgdir/usr/share/doc/niri/"
+  install -vDm 644 bash-completions "$pkgdir/usr/share/bash-completion/completions/niri"
+  install -vDm 644 fish-completions "$pkgdir/usr/share/fish/vendor_completions.d/niri.fish"
+  install -vDm 644 zsh-completions "$pkgdir/usr/share/zsh/site-functions/_niri"
+}

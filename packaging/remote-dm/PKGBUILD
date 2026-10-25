@@ -1,0 +1,61 @@
+# Maintainer: c0de-coffee <53132135+c0de-coffee@users.noreply.github.com>
+#
+# remote-dm: display manager for GNOME-style RDP remote login with gnome-remote-desktop: a login
+# screen per connection, then the user's own headless niri session. Built from a release tag of
+# https://github.com/c0de-coffee/niri (remote-dm/ on the remote-desktop branch).
+
+pkgname=remote-dm
+pkgver=0.1.0
+_tag=v26.04-rd1
+pkgrel=1
+pkgdesc="Display manager for remote logins with gnome-remote-desktop"
+arch=(x86_64)
+url="https://github.com/c0de-coffee/niri/tree/remote-desktop/remote-dm"
+license=(GPL-3.0-only)
+depends=(
+  dbus
+  gcc-libs
+  glibc
+  gnome-remote-desktop
+  niri
+  pam
+  systemd
+)
+makedepends=(
+  rust
+)
+optdepends=(
+  'greetd-regreet: greeter (the default greeter.kdl)'
+  'noctalia-greeter: greeter (greeter-noctalia.kdl)'
+)
+conflicts=(remote-dm-git)
+backup=(
+  etc/pam.d/remote-dm
+  etc/pam.d/remote-dm-autologin
+  etc/pam.d/remote-dm-greeter
+  etc/remote-dm/config.toml
+  etc/remote-dm/greeter.kdl
+  etc/remote-dm/greeter-noctalia.kdl
+)
+source=("niri-$_tag.tar.gz::https://github.com/c0de-coffee/niri/archive/refs/tags/$_tag.tar.gz")
+sha256sums=('63a44681daec1f0eae526eb0302aba4238bd78143022fa155be1fac5774412bd')
+
+_srcdir() {
+  printf 'niri-%s/remote-dm' "${_tag#v}"
+}
+
+prepare() {
+  cd "$(_srcdir)"
+  cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+  cd "$(_srcdir)"
+  cargo build --frozen --release
+}
+
+package() {
+  cd "$(_srcdir)"
+  DESTDIR="$pkgdir" ./install.sh --no-build > /dev/null
+  install -vDm 644 README.md -t "$pkgdir/usr/share/doc/remote-dm/"
+}

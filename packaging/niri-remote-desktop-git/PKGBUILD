@@ -1,15 +1,18 @@
+# Maintainer: c0de-coffee <53132135+c0de-coffee@users.noreply.github.com>
+#
 # niri with remote desktop support (org.gnome.Mutter.RemoteDesktop, virtual outputs), for remote
 # logins with gnome-remote-desktop and remote-dm. Based on Arch's niri PKGBUILD.
 #
-# Builds the remote-desktop branch of the git repository this PKGBUILD lives in (committed
-# changes only). Override with NIRI_REPO=<url or path> and NIRI_BRANCH=<branch>.
+# Builds the remote-desktop branch: of the repository this PKGBUILD lives in (committed changes
+# only), or of https://github.com/c0de-coffee/niri when built elsewhere (AUR). Override with
+# NIRI_REPO=<url or path> and NIRI_BRANCH=<branch>.
 
 pkgname=niri-remote-desktop-git
-pkgver=26.04.r231.gcf88cec5
+pkgver=26.4.0.r0.g00000000
 pkgrel=1
 pkgdesc="A scrollable-tiling Wayland compositor (with remote desktop support)"
 arch=(x86_64)
-url="https://github.com/YaLTeR/niri"
+url="https://github.com/c0de-coffee/niri"
 license=(GPL-3.0-or-later)
 depends=(
   cairo
@@ -39,15 +42,18 @@ optdepends=(
   'gnome-remote-desktop: remote desktop and remote login over RDP'
 )
 provides=(niri wayland-compositor)
-conflicts=(niri)
-_repo=${NIRI_REPO:-$(realpath "$startdir/../..")}
+conflicts=(niri niri-remote-desktop)
+# Inside a checkout of the repository (packaging/<pkg>/): the local repo; elsewhere (AUR): GitHub.
+_repo=${NIRI_REPO:-$( [ -d "$startdir/../../.git" ] && realpath "$startdir/../.." || echo https://github.com/c0de-coffee/niri)}
 source=("niri::git+file://${_repo#file://}#branch=${NIRI_BRANCH:-remote-desktop}")
 case $_repo in *://*) source=("niri::git+$_repo#branch=${NIRI_BRANCH:-remote-desktop}") ;; esac
 sha256sums=('SKIP')
 
 pkgver() {
   cd niri
-  git describe --long --tags --abbrev=8 | sed 's/^v//; s/\([^-]*-g\)/r\1/; s/-/./g'
+  # Not from tags: forks and shallow clones often don't carry upstream's.
+  printf '%s.r%s.g%s' "$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)" \
+    "$(git rev-list --count HEAD)" "$(git rev-parse --short=8 HEAD)"
 }
 
 prepare() {
