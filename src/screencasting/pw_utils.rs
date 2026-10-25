@@ -62,7 +62,9 @@ use crate::render_helpers::{
 use crate::screencasting::CastRenderElement;
 use crate::utils::{get_monotonic_time, CastSessionId, CastStreamId};
 
+mod explicit_sync;
 mod shm_mapping;
+use explicit_sync::{BufferTimeline, SyncDevice, SYNC_BLOCKS};
 use shm_mapping::ShmMapping;
 
 // Give a 0.1 ms allowance for presentation time errors.
@@ -134,6 +136,14 @@ struct CastInner {
     /// stored in order from oldest to newest, and the same ordering should be preserved when
     /// submitting completed buffers to PipeWire.
     rendering_buffers: Vec<(NonNull<pw_buffer>, SyncPoint)>,
+    /// Set when the render node supports timeline syncobjs, so we can offer explicit sync.
+    sync_device: Option<SyncDevice>,
+    /// Timeline syncobjs of explicit-sync DMA-BUF buffers, keyed like `dmabufs`.
+    timelines: HashMap<i64, BufferTimeline>,
+    /// Dequeued explicit-sync buffers that the consumer hasn't released yet.
+    ///
+    /// We hold on to them and check again on the next dequeue, like mutter does.
+    waiting_for_release: Vec<NonNull<pw_buffer>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -456,6 +466,9 @@ impl PipeWire {
             (None, FormatSet::default())
         };
 
+        let sync_device = gbm.as_ref().and_then(|gbm| SyncDevice::new(gbm.as_fd()));
+        let explicit_sync = sync_device.is_some();
+
         // Like in good old wayland-rs times...
         let inner = Rc::new(RefCell::new(CastInner {
             is_active: false,
@@ -466,6 +479,9 @@ impl PipeWire {
             dmabufs: HashMap::new(),
             shmbufs: HashMap::new(),
             rendering_buffers: Vec::new(),
+            sync_device,
+            timelines: HashMap::new(),
+            waiting_for_release: Vec::new(),
         }));
 
         let listener =
@@ -688,7 +704,7 @@ impl PipeWire {
                             _ => (),
                         }
 
-                        let o1 = if prop_modifier.is_some() {
+                        let (o1, o1_sync) = if prop_modifier.is_some() {
                             // Verify that alpha and modifier didn't change.
                             let plane_count = match &*state {
                                 CastState::ConfirmationPending {
@@ -779,34 +795,10 @@ impl PipeWire {
                                 }
                             };
 
-                            pod::object!(
-                                SpaTypes::ObjectParamBuffers,
-                                ParamType::Buffers,
-                                Property::new(
-                                    SPA_PARAM_BUFFERS_buffers,
-                                    pod::Value::Choice(ChoiceValue::Int(Choice(
-                                        ChoiceFlags::empty(),
-                                        ChoiceEnum::Range {
-                                            default: 8,
-                                            min: 2,
-                                            max: 16
-                                        }
-                                    ))),
-                                ),
-                                Property::new(
-                                    SPA_PARAM_BUFFERS_blocks,
-                                    pod::Value::Int(plane_count)
-                                ),
-                                Property::new(
-                                    SPA_PARAM_BUFFERS_dataType,
-                                    pod::Value::Choice(ChoiceValue::Int(Choice(
-                                        ChoiceFlags::empty(),
-                                        ChoiceEnum::Flags {
-                                            default: 1 << DataType::DmaBuf.as_raw(),
-                                            flags: vec![1 << DataType::DmaBuf.as_raw()],
-                                        },
-                                    ))),
-                                ),
+                            (
+                                buffers_param(plane_count, DataType::DmaBuf, false),
+                                explicit_sync
+                                    .then(|| buffers_param(plane_count, DataType::DmaBuf, true)),
                             )
                         } else {
                             debug!("negotiated inefficient shm stream, moving to ready state");
@@ -819,34 +811,9 @@ impl PipeWire {
                                 cursor_damage_tracker: None,
                                 last_cursor_location: None,
                             };
-                            pod::object!(
-                                SpaTypes::ObjectParamBuffers,
-                                ParamType::Buffers,
-                                Property::new(
-                                    SPA_PARAM_BUFFERS_buffers,
-                                    pod::Value::Choice(ChoiceValue::Int(Choice(
-                                        ChoiceFlags::empty(),
-                                        ChoiceEnum::Range {
-                                            default: 8,
-                                            min: 2,
-                                            max: 16
-                                        }
-                                    ))),
-                                ),
-                                Property::new(
-                                    SPA_PARAM_BUFFERS_blocks,
-                                    pod::Value::Int(SHM_BLOCKS as i32),
-                                ),
-                                Property::new(
-                                    SPA_PARAM_BUFFERS_dataType,
-                                    pod::Value::Choice(ChoiceValue::Int(Choice(
-                                        ChoiceFlags::empty(),
-                                        ChoiceEnum::Flags {
-                                            default: 1 << DataType::MemFd.as_raw(),
-                                            flags: vec![1 << DataType::MemFd.as_raw()],
-                                        },
-                                    ))),
-                                ),
+                            (
+                                buffers_param(SHM_BLOCKS as i32, DataType::MemFd, false),
+                                None,
                             )
                         };
 
@@ -865,8 +832,33 @@ impl PipeWire {
 
                         let mut b1 = vec![];
                         let mut b2 = vec![];
+                        let mut b_sync = vec![];
+                        let mut b_sync_meta = vec![];
 
-                        let mut params = vec![make_pod(&mut b1, o1), make_pod(&mut b2, o2)];
+                        // Buffers params go in order of preference: the explicit sync one is
+                        // only picked when the consumer also announces SyncTimeline support.
+                        let mut params = vec![];
+                        if let Some(o1_sync) = o1_sync {
+                            params.push(make_pod(&mut b_sync, o1_sync));
+                        }
+                        let has_sync = !params.is_empty();
+                        params.push(make_pod(&mut b1, o1));
+                        params.push(make_pod(&mut b2, o2));
+                        if has_sync {
+                            let o_sync_meta = pod::object!(
+                                SpaTypes::ObjectParamMeta,
+                                ParamType::Meta,
+                                Property::new(
+                                    SPA_PARAM_META_type,
+                                    pod::Value::Id(spa::utils::Id(SPA_META_SyncTimeline))
+                                ),
+                                Property::new(
+                                    SPA_PARAM_META_size,
+                                    pod::Value::Int(size_of::<spa_meta_sync_timeline>() as i32)
+                                ),
+                            );
+                            params.push(make_pod(&mut b_sync_meta, o_sync_meta));
+                        }
 
                         let mut b_cursor = vec![];
                         if cursor_mode == CursorMode::Metadata {
@@ -1133,7 +1125,30 @@ impl Cast {
     }
 
     fn dequeue_available_buffer(&mut self) -> Option<NonNull<pw_buffer>> {
-        unsafe { NonNull::new(self.stream.dequeue_raw_buffer()) }
+        let mut inner = self.inner.borrow_mut();
+        if inner.sync_device.is_none() {
+            return unsafe { NonNull::new(self.stream.dequeue_raw_buffer()) };
+        }
+
+        unsafe {
+            // First, buffers that we set aside earlier because they weren't released yet.
+            let released = inner
+                .waiting_for_release
+                .iter()
+                .position(|buffer| inner.is_released(*buffer));
+            if let Some(idx) = released {
+                return Some(inner.waiting_for_release.remove(idx));
+            }
+
+            loop {
+                let buffer = NonNull::new(self.stream.dequeue_raw_buffer())?;
+                if inner.is_released(buffer) {
+                    return Some(buffer);
+                }
+                trace!("buffer not released by the consumer yet, setting aside");
+                inner.waiting_for_release.push(buffer);
+            }
+        }
     }
 
     fn queue_completed_buffers(&mut self) {
@@ -1149,9 +1164,15 @@ impl Cast {
             .position(|(_, sync)| !sync.is_reached())
             .unwrap_or(inner.rendering_buffers.len());
 
-        for (buffer, _) in inner.rendering_buffers.drain(..first_in_progress_idx) {
+        let completed: Vec<_> = inner
+            .rendering_buffers
+            .drain(..first_in_progress_idx)
+            .map(|(buffer, _)| buffer)
+            .collect();
+        for buffer in completed {
             trace!("queueing completed buffer");
             unsafe {
+                inner.advance_sync_points(buffer);
                 pw_stream_queue_buffer(self.stream.as_raw_ptr(), buffer.as_ptr());
             }
         }
@@ -1344,7 +1365,7 @@ impl Cast {
                 }
                 Err(err) => {
                     warn!("error rendering to buffer: {err:?}");
-                    return_unused_buffer(&self.stream, pw_buffer);
+                    return_unused_buffer(&self.stream, &self.inner.borrow(), pw_buffer);
                     false
                 }
             }
@@ -1406,7 +1427,7 @@ impl Cast {
                 }
                 Err(err) => {
                     warn!("error clearing buffer: {err:?}");
-                    return_unused_buffer(&self.stream, pw_buffer);
+                    return_unused_buffer(&self.stream, &self.inner.borrow(), pw_buffer);
                     false
                 }
             }
@@ -1456,7 +1477,9 @@ impl CastInner {
                         .context("error allocating dmabuf")?;
 
                     let plane_count = dmabuf.num_planes();
-                    assert_eq!((*spa_buffer).n_datas as usize, plane_count);
+                    let has_sync = explicit_sync::find_sync_timeline(spa_buffer).is_some();
+                    let sync_blocks = if has_sync { SYNC_BLOCKS } else { 0 };
+                    assert_eq!((*spa_buffer).n_datas as usize, plane_count + sync_blocks);
 
                     for (i, (fd, (stride, offset))) in
                         zip(dmabuf.handles(), zip(dmabuf.strides(), dmabuf.offsets())).enumerate()
@@ -1485,6 +1508,19 @@ impl CastInner {
                     }
 
                     let fd = (*(*spa_buffer).datas).fd;
+
+                    if has_sync {
+                        let Some(device) = &self.sync_device else {
+                            bail!("explicit sync negotiated without a sync device");
+                        };
+                        let timeline = device
+                            .create_timeline()
+                            .context("error creating timeline syncobj")?;
+                        explicit_sync::fill_sync_blocks(spa_buffer, &timeline);
+                        trace!("pw buffer uses explicit sync");
+                        assert!(self.timelines.insert(fd, timeline).is_none());
+                    }
+
                     assert!(self.dmabufs.insert(fd, dmabuf).is_none());
                 }
 
@@ -1523,6 +1559,8 @@ impl CastInner {
     unsafe fn on_remove_buffer(&mut self, buffer: *mut pw_buffer) {
         self.rendering_buffers
             .retain(|(buf, _)| buf.as_ptr() != buffer);
+        self.waiting_for_release
+            .retain(|buf| buf.as_ptr() != buffer);
 
         unsafe {
             let spa_buffer = (*buffer).buffer;
@@ -1534,6 +1572,11 @@ impl CastInner {
 
                 let fd = (*spa_data).fd;
                 self.dmabufs.remove(&fd);
+                if let Some(timeline) = self.timelines.remove(&fd) {
+                    if let Some(device) = &self.sync_device {
+                        device.destroy_timeline(timeline);
+                    }
+                }
             } else if (*spa_data).type_ == DataType::MemFd.as_raw() {
                 trace!("pw stream: remove_buffer (shm)");
                 assert_eq!((*spa_buffer).n_datas, SHM_BLOCKS as u32);
@@ -1547,6 +1590,50 @@ impl CastInner {
                 );
             }
         }
+    }
+
+    /// Moves the buffer's sync points forward and signals the acquire point.
+    ///
+    /// Must be called right before queueing every buffer. Buffers are only queued after
+    /// rendering completed, so the data is ready as soon as we queue.
+    unsafe fn advance_sync_points(&self, pw_buffer: NonNull<pw_buffer>) {
+        let spa_buffer = (*pw_buffer.as_ptr()).buffer;
+        let Some(meta) = explicit_sync::find_sync_timeline(spa_buffer) else {
+            return;
+        };
+        let fd = (*(*spa_buffer).datas).fd;
+        let (Some(device), Some(timeline)) = (&self.sync_device, self.timelines.get(&fd)) else {
+            return;
+        };
+
+        let meta = meta.as_ptr();
+        (*meta).acquire_point = (*meta).release_point + 1;
+        (*meta).release_point = (*meta).acquire_point + 1;
+
+        if let Err(err) = device.signal(timeline, (*meta).acquire_point) {
+            warn!("error signaling acquire point: {err:?}");
+        }
+    }
+
+    /// Whether the consumer is done with the buffer, so we can render into it.
+    unsafe fn is_released(&self, pw_buffer: NonNull<pw_buffer>) -> bool {
+        let spa_buffer = (*pw_buffer.as_ptr()).buffer;
+        let Some(meta) = explicit_sync::find_sync_timeline(spa_buffer) else {
+            return true;
+        };
+        let fd = (*(*spa_buffer).datas).fd;
+        let (Some(device), Some(timeline)) = (&self.sync_device, self.timelines.get(&fd)) else {
+            return true;
+        };
+
+        let release_point = (*meta.as_ptr()).release_point;
+        device
+            .is_reached(timeline, release_point)
+            .unwrap_or_else(|err| {
+                // Better to risk a torn frame than to get stuck.
+                warn!("error querying release point: {err:?}");
+                true
+            })
     }
 }
 
@@ -1572,6 +1659,59 @@ fn pw_version_supports_cursor_metadata() -> bool {
     // This PipeWire version fixed a critical memory issue with cursor metadata:
     // https://gitlab.freedesktop.org/pipewire/pipewire/-/merge_requests/2538
     unsafe { pw_check_library_version(1, 4, 8) }
+}
+
+/// `SPA_PARAM_Buffers` for `blocks` data blocks of `data_type`.
+///
+/// With `explicit_sync`, two more blocks are added for the acquire and release syncobjs, and the
+/// param requires `SPA_META_SyncTimeline`, so that PipeWire only picks it when both sides support
+/// explicit sync.
+fn buffers_param(blocks: i32, data_type: DataType, explicit_sync: bool) -> pod::Object {
+    let mut properties = vec![
+        Property::new(
+            SPA_PARAM_BUFFERS_buffers,
+            pod::Value::Choice(ChoiceValue::Int(Choice(
+                ChoiceFlags::empty(),
+                ChoiceEnum::Range {
+                    default: 8,
+                    min: 2,
+                    max: 16,
+                },
+            ))),
+        ),
+        Property::new(
+            SPA_PARAM_BUFFERS_blocks,
+            pod::Value::Int(if explicit_sync {
+                blocks + SYNC_BLOCKS as i32
+            } else {
+                blocks
+            }),
+        ),
+        Property::new(
+            SPA_PARAM_BUFFERS_dataType,
+            pod::Value::Choice(ChoiceValue::Int(Choice(
+                ChoiceFlags::empty(),
+                ChoiceEnum::Flags {
+                    default: 1 << data_type.as_raw(),
+                    flags: vec![1 << data_type.as_raw()],
+                },
+            ))),
+        ),
+    ];
+
+    if explicit_sync {
+        properties.push(Property {
+            key: SPA_PARAM_BUFFERS_metaType,
+            flags: PropertyFlags::MANDATORY,
+            value: pod::Value::Int(1 << SPA_META_SyncTimeline),
+        });
+    }
+
+    pod::Object {
+        type_: SpaTypes::ObjectParamBuffers.as_raw(),
+        id: ParamType::Buffers.as_raw(),
+        properties,
+    }
 }
 
 fn make_pod(buffer: &mut Vec<u8>, object: pod::Object) -> &Pod {
@@ -1703,7 +1843,7 @@ fn allocate_shmbuf(size: Size<u32, Physical>) -> anyhow::Result<Shmbuf> {
     })
 }
 
-unsafe fn return_unused_buffer(stream: &Stream, pw_buffer: NonNull<pw_buffer>) {
+unsafe fn return_unused_buffer(stream: &Stream, inner: &CastInner, pw_buffer: NonNull<pw_buffer>) {
     // pw_stream_return_buffer() requires too new PipeWire (1.4.0). So, mark as
     // corrupted and queue.
     let pw_buffer = pw_buffer.as_ptr();
@@ -1718,6 +1858,9 @@ unsafe fn return_unused_buffer(stream: &Stream, pw_buffer: NonNull<pw_buffer>) {
         (*header).flags = SPA_META_HEADER_FLAG_CORRUPTED;
     }
 
+    // Consumers read new sync points from every buffer they get, corrupted ones included, and
+    // signal the release point when they give it back.
+    inner.advance_sync_points(NonNull::new_unchecked(pw_buffer));
     pw_stream_queue_buffer(stream.as_raw_ptr(), pw_buffer);
 }
 
