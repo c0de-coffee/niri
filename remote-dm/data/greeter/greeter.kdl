@@ -1,0 +1,35 @@
+// niri config for remote-dm greeter sessions.
+// Runs gnome-remote-desktop's handover daemon, which takes over the RDP connection.
+
+spawn-at-startup "/usr/lib/gnome-remote-desktop-daemon" "--handover"
+
+// Stands in for gnome-session's Logout, which grd calls to end the greeter when the RDP
+// session ends.
+spawn-at-startup "remote-dm" "session-manager"
+
+// The greeter: any greetd greeter works, remote-dm speaks greetd's IPC (GREETD_SOCK).
+spawn-at-startup "regreet"
+
+// The greeter is the only window; fill the screen with it. The session starts without outputs
+// (the RDP client brings a virtual one), so the greeter usually opens before there is anything
+// to fullscreen on: a full-width column covers that, since proportions are recomputed when the
+// window lands on the output.
+window-rule {
+    open-fullscreen true
+}
+
+layout {
+    gaps 0
+    default-column-width { proportion 1.0; }
+    focus-ring { off; }
+    border { off; }
+}
+
+// Debug output of gnome-remote-desktop's handover daemon (ends up in the journal).
+environment {
+    G_MESSAGES_DEBUG "all"
+}
+
+hotkey-overlay {
+    skip-at-startup
+}
