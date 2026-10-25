@@ -46,6 +46,9 @@ pub struct DBusServers {
     pub conn_screen_cast: Option<Connection>,
     #[cfg(feature = "xdp-gnome-screencast")]
     pub conn_remote_desktop: Option<Connection>,
+    /// Remote desktop sessions, for the clipboard.
+    #[cfg(feature = "xdp-gnome-screencast")]
+    pub remote_desktop_sessions: mutter_remote_desktop::RemoteDesktopSessions,
     pub conn_login1: Option<Connection>,
     pub conn_locale1: Option<Connection>,
     pub conn_a11y_manager: Option<Connection>,
@@ -155,6 +158,7 @@ impl DBusServers {
                         }
                     })
                     .unwrap();
+                dbus.remote_desktop_sessions = remote_desktop_sessions.clone();
                 let remote_desktop = RemoteDesktop::new(remote_desktop_sessions, to_niri);
                 dbus.conn_remote_desktop = try_start(remote_desktop, is_session_instance);
             }

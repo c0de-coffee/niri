@@ -58,7 +58,7 @@ use smithay::wayland::selection::primary_selection::{
 use smithay::wayland::selection::wlr_data_control::{
     DataControlHandler as WlrDataControlHandler, DataControlState as WlrDataControlState,
 };
-use smithay::wayland::selection::{SelectionHandler, SelectionTarget};
+use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::session_lock::{
     LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
 };
@@ -284,20 +284,54 @@ impl KeyboardShortcutsInhibitHandler for State {
     }
 }
 
+/// A clipboard selection that niri provides itself.
+#[derive(Debug, Clone)]
+pub enum SelectionData {
+    /// Data we have (e.g. a screenshot).
+    Bytes(Arc<[u8]>),
+    /// The clipboard of a remote desktop client.
+    #[cfg(feature = "xdp-gnome-screencast")]
+    RemoteDesktop { session_id: String },
+}
+
 impl SelectionHandler for State {
-    type SelectionUserData = Arc<[u8]>;
+    type SelectionUserData = SelectionData;
+
+    fn new_selection(
+        &mut self,
+        ty: SelectionTarget,
+        source: Option<SelectionSource>,
+        _seat: Seat<Self>,
+    ) {
+        #[cfg(feature = "xdp-gnome-screencast")]
+        if ty == SelectionTarget::Clipboard {
+            let mime_types = source.map(|source| source.mime_types()).unwrap_or_default();
+            self.niri.on_clipboard_changed(mime_types);
+        }
+        #[cfg(not(feature = "xdp-gnome-screencast"))]
+        let _ = (ty, source);
+    }
 
     fn send_selection(
         &mut self,
         _ty: SelectionTarget,
-        _mime_type: String,
+        mime_type: String,
         fd: OwnedFd,
         _seat: Seat<Self>,
         user_data: &Self::SelectionUserData,
     ) {
         let _span = tracy_client::span!("send_selection");
 
-        let buf = user_data.clone();
+        let buf = match user_data {
+            SelectionData::Bytes(buf) => buf.clone(),
+            #[cfg(feature = "xdp-gnome-screencast")]
+            SelectionData::RemoteDesktop { session_id } => {
+                self.niri
+                    .remote_desktop_selection_transfer(session_id, mime_type, fd);
+                return;
+            }
+        };
+        let _ = mime_type;
         thread::spawn(move || {
             // Clear O_NONBLOCK, otherwise File::write_all() will stop halfway.
             if let Err(err) = fcntl_setfl(&fd, OFlags::empty()) {

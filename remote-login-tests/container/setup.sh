@@ -39,7 +39,7 @@ PACKAGES=(
   pipewire wireplumber
   gnome-remote-desktop fuse3 polkit
   # test clients
-  mesa-utils gnome-text-editor ttf-dejavu
+  mesa-utils gnome-text-editor ttf-dejavu noto-fonts-cjk
 )
 
 echo "== host: arch-install-scripts"

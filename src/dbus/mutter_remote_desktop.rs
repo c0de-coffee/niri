@@ -6,6 +6,11 @@
 //!
 //! A screencast session created with `remote-desktop-session-id` is linked to a remote desktop
 //! session: starting or stopping the remote desktop session starts or stops the screencast too.
+//!
+//! Clipboard: once enabled, `SetSelection` makes the client's clipboard ours (niri then owns the
+//! Wayland clipboard on its behalf, and asks for data with `SelectionTransfer`, answered with
+//! `SelectionWrite`), and local clipboard changes are announced with `SelectionOwnerChanged`, read
+//! with `SelectionRead`.
 
 use std::collections::HashMap;
 use std::os::fd::OwnedFd;
@@ -14,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use smithay::reexports::reis::eis;
+use smithay::reexports::rustix::pipe::{pipe_with, PipeFlags};
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{self, OwnedObjectPath, Value};
 use zbus::{fdo, interface, ObjectServer};
@@ -46,6 +52,9 @@ pub struct Session {
     started: Arc<AtomicBool>,
     stopped: Arc<AtomicBool>,
     eis_connected: Arc<AtomicBool>,
+    clipboard_enabled: Arc<AtomicBool>,
+    /// Fds of `SelectionTransfer` requests, until the client picks them up with `SelectionWrite`.
+    transfers: Arc<Mutex<HashMap<u32, OwnedFd>>>,
 }
 
 pub enum RemoteDesktopToNiri {
@@ -57,6 +66,15 @@ pub enum RemoteDesktopToNiri {
         session_id: String,
         cast_session_id: Option<CastSessionId>,
     },
+    /// The client's clipboard has these types (empty: it has nothing anymore).
+    SetSelection {
+        session_id: String,
+        mime_types: Vec<String>,
+    },
+    /// The client disabled the clipboard; drop the selection if it's theirs.
+    ClipboardDisabled { session_id: String },
+    /// Write the local clipboard in this type to `fd`.
+    ReadSelection { mime_type: String, fd: OwnedFd },
 }
 
 #[interface(name = "org.gnome.Mutter.RemoteDesktop")]
@@ -77,6 +95,8 @@ impl RemoteDesktop {
             started: Arc::new(AtomicBool::new(false)),
             stopped: Arc::new(AtomicBool::new(false)),
             eis_connected: Arc::new(AtomicBool::new(false)),
+            clipboard_enabled: Arc::new(AtomicBool::new(false)),
+            transfers: Arc::new(Mutex::new(HashMap::new())),
         };
 
         match server.at(&path, session.clone()).await {
@@ -188,8 +208,91 @@ impl Session {
         Ok(zvariant::OwnedFd::from(OwnedFd::from(theirs)))
     }
 
+    async fn enable_clipboard(&self, options: HashMap<&str, Value<'_>>) -> fdo::Result<()> {
+        debug!(id = self.id, ?options, "enable_clipboard");
+        self.clipboard_enabled.store(true, Ordering::SeqCst);
+
+        // The client may already have something in its clipboard.
+        let mime_types = mime_types(&options);
+        if !mime_types.is_empty() {
+            self.send(RemoteDesktopToNiri::SetSelection {
+                session_id: self.id.clone(),
+                mime_types,
+            })?;
+        }
+        Ok(())
+    }
+
+    async fn disable_clipboard(&self) -> fdo::Result<()> {
+        debug!(id = self.id, "disable_clipboard");
+        self.clipboard_enabled.store(false, Ordering::SeqCst);
+        // Unanswered transfers fail (the readers get EOF).
+        self.transfers.lock().unwrap().clear();
+        self.send(RemoteDesktopToNiri::ClipboardDisabled {
+            session_id: self.id.clone(),
+        })
+    }
+
+    async fn set_selection(&self, options: HashMap<&str, Value<'_>>) -> fdo::Result<()> {
+        self.check_clipboard_enabled()?;
+        let mime_types = mime_types(&options);
+        debug!(id = self.id, ?mime_types, "set_selection");
+        self.send(RemoteDesktopToNiri::SetSelection {
+            session_id: self.id.clone(),
+            mime_types,
+        })
+    }
+
+    async fn selection_write(&self, serial: u32) -> fdo::Result<zvariant::OwnedFd> {
+        self.check_clipboard_enabled()?;
+        let fd = self.transfers.lock().unwrap().remove(&serial);
+        let fd = fd.ok_or_else(|| fdo::Error::Failed(format!("no transfer {serial}")))?;
+        Ok(zvariant::OwnedFd::from(fd))
+    }
+
+    async fn selection_write_done(&self, serial: u32, success: bool) -> fdo::Result<()> {
+        debug!(id = self.id, serial, success, "selection_write_done");
+        // Normally picked up by SelectionWrite already.
+        self.transfers.lock().unwrap().remove(&serial);
+        Ok(())
+    }
+
+    async fn selection_read(&self, mime_type: &str) -> fdo::Result<zvariant::OwnedFd> {
+        self.check_clipboard_enabled()?;
+        debug!(id = self.id, mime_type, "selection_read");
+
+        let (read, write) = pipe_with(PipeFlags::CLOEXEC)
+            .map_err(|err| fdo::Error::Failed(format!("error creating pipe: {err}")))?;
+        self.send(RemoteDesktopToNiri::ReadSelection {
+            mime_type: mime_type.to_owned(),
+            fd: write,
+        })?;
+        Ok(zvariant::OwnedFd::from(read))
+    }
+
+    #[zbus(signal)]
+    pub async fn selection_owner_changed(
+        ctxt: &SignalEmitter<'_>,
+        options: HashMap<&str, Value<'_>>,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    pub async fn selection_transfer(
+        ctxt: &SignalEmitter<'_>,
+        mime_type: &str,
+        serial: u32,
+    ) -> zbus::Result<()>;
+
     #[zbus(signal)]
     async fn closed(ctxt: &SignalEmitter<'_>) -> zbus::Result<()>;
+}
+
+/// The "mime-types" option of the clipboard methods.
+fn mime_types(options: &HashMap<&str, Value<'_>>) -> Vec<String> {
+    options
+        .get("mime-types")
+        .and_then(|value| <Vec<String>>::try_from(value.try_clone().ok()?).ok())
+        .unwrap_or_default()
 }
 
 impl RemoteDesktop {
@@ -213,6 +316,33 @@ impl Start for RemoteDesktop {
 }
 
 impl Session {
+    fn send(&self, msg: RemoteDesktopToNiri) -> fdo::Result<()> {
+        self.to_niri
+            .send(msg)
+            .map_err(|_| fdo::Error::Failed("niri is gone".to_owned()))
+    }
+
+    fn check_clipboard_enabled(&self) -> fdo::Result<()> {
+        if self.clipboard_enabled.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(fdo::Error::Failed("the clipboard isn't enabled".to_owned()))
+        }
+    }
+
+    pub fn is_clipboard_enabled(&self) -> bool {
+        self.clipboard_enabled.load(Ordering::SeqCst)
+    }
+
+    /// Keeps the fd of a `SelectionTransfer` for the client's `SelectionWrite`.
+    pub fn add_transfer(&self, serial: u32, fd: OwnedFd) {
+        self.transfers.lock().unwrap().insert(serial, fd);
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     /// Links a screencast session to this remote desktop session.
     pub fn link_cast_session(&self, cast_session: mutter_screen_cast::Session) -> fdo::Result<()> {
         if self.stopped.load(Ordering::SeqCst) {

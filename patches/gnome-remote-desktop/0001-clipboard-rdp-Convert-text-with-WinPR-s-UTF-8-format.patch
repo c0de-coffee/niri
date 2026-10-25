@@ -1,0 +1,58 @@
+Subject: [PATCH] clipboard-rdp: Convert text with WinPR's UTF-8 text format
+
+Since FreeRDP 3.32.2, WinPR's "text/plain" format is ASCII with \uXXXX
+escapes for all other characters (its X11 meaning), and
+"text/plain;charset=utf-8" is UTF-8 (FreeRDP commits 3217ab2999 and
+c6144f2510). Text in the local clipboard is UTF-8, so text copied on
+the client arrived as e.g. "测试 abc", and literal "\uXXXX"
+text copied locally was unescaped on the way to the client.
+
+Use "text/plain;charset=utf-8" where WinPR has it, and "text/plain"
+with older WinPR, where that one is UTF-8.
+
+---
+ src/grd-clipboard-rdp.c | 23 +++++++++++++++++++----
+ 1 file changed, 19 insertions(+), 4 deletions(-)
+
+--- a/src/grd-clipboard-rdp.c
++++ b/src/grd-clipboard-rdp.c
+@@ -803,5 +803,22 @@
+   Stream_Free (s, FALSE);
+ }
+
++/*
++ * Text in the local clipboard is UTF-8. Since FreeRDP 3.32.2, WinPR's
++ * "text/plain" is ASCII with \uXXXX escapes for everything else (its X11
++ * meaning), so use "text/plain;charset=utf-8" where WinPR has it.
++ */
++static uint32_t
++get_utf8_text_format_id (wClipboard *system)
++{
++  uint32_t format_id;
++
++  format_id = ClipboardGetFormatId (system, "text/plain;charset=utf-8");
++  if (format_id)
++    return format_id;
++
++  return ClipboardGetFormatId (system, "text/plain");
++}
++
+ static void
+ grd_clipboard_rdp_submit_requested_server_content (GrdClipboard *clipboard,
+@@ -1613,7 +1630,6 @@
+     case CF_UNICODETEXT:
+       mime_type = clipboard_rdp->which_unicode_format;
+       needs_null_terminator = TRUE;
+       needs_conversion = TRUE;
+-      src_format_id = ClipboardGetFormatId (clipboard_rdp->system,
+-                                            "text/plain");
++      src_format_id = get_utf8_text_format_id (clipboard_rdp->system);
+       break;
+@@ -1828,6 +1844,5 @@
+     case GRD_MIME_TYPE_TEXT_PLAIN_UTF8:
+     case GRD_MIME_TYPE_TEXT_UTF8_STRING:
+       is_null_terminated = TRUE;
+-      dst_format_id = ClipboardGetFormatId (clipboard_rdp->system,
+-                                            "text/plain");
++      dst_format_id = get_utf8_text_format_id (clipboard_rdp->system);
+       break;

@@ -6411,7 +6411,7 @@ impl Niri {
                         &state.niri.display_handle,
                         &state.niri.seat,
                         vec![String::from("image/png")],
-                        buf.clone(),
+                        crate::handlers::SelectionData::Bytes(buf.clone()),
                     );
                 }
                 calloop::channel::Event::Closed => (),
