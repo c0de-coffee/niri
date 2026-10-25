@@ -463,6 +463,9 @@ pub struct Niri {
 
     pub satellite: Option<Satellite>,
 
+    /// Outputs that aren't displayed: the headless backend's and virtual outputs.
+    pub offscreen: crate::offscreen::OffscreenState,
+
     #[cfg(feature = "xdp-gnome-screencast")]
     pub casting: Screencasting,
     /// EIS clients of remote desktop sessions, by session ID.
@@ -765,7 +768,7 @@ impl State {
         event_loop: LoopHandle<'static, State>,
         stop_signal: LoopSignal,
         display: Display<State>,
-        headless: bool,
+        headless: Option<Headless>,
         create_wayland_socket: bool,
         is_session_instance: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
@@ -777,8 +780,7 @@ impl State {
             || env::var_os("WAYLAND_SOCKET").is_some()
             || env::var_os("DISPLAY").is_some();
 
-        let mut backend = if headless {
-            let headless = Headless::new();
+        let mut backend = if let Some(headless) = headless {
             Backend::Headless(headless)
         } else if has_display {
             let winit = Winit::new(config.clone(), event_loop.clone())?;
@@ -2919,6 +2921,8 @@ impl Niri {
 
             satellite: None,
 
+            offscreen: Default::default(),
+
             #[cfg(feature = "xdp-gnome-screencast")]
             casting: screencasting,
             #[cfg(feature = "xdp-gnome-screencast")]
@@ -3213,6 +3217,7 @@ impl Niri {
         self.gamma_control_manager_state.output_removed(output);
 
         let state = self.output_state.remove(output).unwrap();
+        self.offscreen.remove_output(output);
 
         match state.redraw_state {
             RedrawState::Idle => (),

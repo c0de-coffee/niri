@@ -16,6 +16,7 @@ pub mod ipc;
 pub mod layer;
 pub mod layout;
 pub mod niri;
+pub mod offscreen;
 pub mod protocols;
 #[cfg(feature = "xdp-gnome-screencast")]
 pub mod remote_desktop;

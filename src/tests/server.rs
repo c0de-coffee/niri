@@ -21,7 +21,7 @@ impl Server {
             handle.clone(),
             event_loop.get_signal(),
             display,
-            true,
+            Some(crate::backend::Headless::new()),
             false,
             false,
         )

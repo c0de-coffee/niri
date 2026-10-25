@@ -26,6 +26,13 @@ pub struct Cli {
     /// on a TTY as your non-main compositor instance, to avoid messing up the global environment.
     #[arg(long)]
     pub session: bool,
+    /// Run without a display or seat, for remote sessions.
+    ///
+    /// Renders on a GPU render node (`debug { render-drm-device }`, or the first one). Starts
+    /// without outputs: remote desktop clients create virtual ones. Input comes in through
+    /// remote desktop.
+    #[arg(long)]
+    pub headless: bool,
     /// Command to run upon compositor startup.
     #[arg(last = true)]
     pub command: Vec<OsString>,

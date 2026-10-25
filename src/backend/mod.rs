@@ -105,7 +105,7 @@ impl Backend {
         match self {
             Backend::Tty(tty) => tty.render(niri, output, target_presentation_time),
             Backend::Winit(winit) => winit.render(niri, output),
-            Backend::Headless(headless) => headless.render(niri, output),
+            Backend::Headless(headless) => headless.render(niri, output, target_presentation_time),
         }
     }
 
@@ -177,7 +177,7 @@ impl Backend {
         match self {
             Backend::Tty(tty) => tty.primary_gbm_device(),
             Backend::Winit(winit) => winit.gbm_device(),
-            Backend::Headless(_) => None,
+            Backend::Headless(headless) => headless.gbm_device(),
         }
     }
 

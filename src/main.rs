@@ -188,7 +188,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         event_loop.handle(),
         event_loop.get_signal(),
         display,
-        false,
+        cli.headless.then(niri::backend::Headless::with_gpu),
         true,
         cli.session,
     )
