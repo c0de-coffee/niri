@@ -116,6 +116,7 @@ enum LoginState {
 
 /// A user logging in from a remote greeter.
 struct Login {
+    username: String,
     session: Session,
     state: LoginState,
     /// The greeter request waiting for what PAM does next.
@@ -468,9 +469,11 @@ impl State {
                 match Session::spawn(&worker_request, key, self.session_events.clone()).await {
                     Ok(session) => {
                         tracing::info!(remote = remote_key, username, "login started");
+                        let username = username.clone();
                         self.sessions.insert(key, (remote_key, Role::User));
                         if let Some(remote) = self.remotes.get_mut(&remote_key) {
                             remote.login = Some(Login {
+                                username,
                                 session,
                                 state: LoginState::Authenticating,
                                 reply: Some(reply),
@@ -507,6 +510,22 @@ impl State {
                     let _ = reply.send(Response::error("not authenticated"));
                     return;
                 }
+
+                // Back to the session the user already has, if any (like GDM does).
+                let username = login.username.clone();
+                if let Some(existing) = self.find_user_session(&username, remote_key) {
+                    tracing::info!(remote = remote_key, existing, username, "reconnecting to the existing session");
+                    let remote = self.remotes.get_mut(&remote_key).unwrap();
+                    if let Some(mut login) = remote.login.take() {
+                        let _ = login.session.send(&WorkerInput::Cancel).await;
+                    }
+                    let _ = reply.send(Response::Success);
+                    self.reconnect(remote_key, existing).await;
+                    return;
+                }
+
+                let remote = self.remotes.get_mut(&remote_key).unwrap();
+                let login = remote.login.as_mut().unwrap();
                 tracing::debug!(remote = remote_key, ?cmd, "ignoring the greeter's session command");
                 let input = WorkerInput::Start {
                     command: self.config.user_command.clone(),
@@ -537,6 +556,43 @@ impl State {
                 let _ = reply.send(Response::Success);
             }
         }
+    }
+
+    /// Another remote display whose user session for `username` is up.
+    fn find_user_session(&self, username: &str, except: u64) -> Option<u64> {
+        self.remotes.iter().find_map(|(&key, remote)| {
+            let login = remote.login.as_ref()?;
+            (key != except
+                && login.username == username
+                && login.state == LoginState::Started
+                && remote.user_display.is_some())
+            .then_some(key)
+        })
+    }
+
+    /// Moves the connection of `remote_key` (now in its greeter session) to the user session of
+    /// `existing`: pointing the existing session's display at the new client makes grd hand the
+    /// client over to that session's `grd --handover`.
+    async fn reconnect(&mut self, remote_key: u64, existing: u64) {
+        let Some(remote_id) = self
+            .remotes
+            .get(&remote_key)
+            .map(|remote| remote.request.remote_id.clone())
+        else {
+            return;
+        };
+        let Some(existing_remote) = self.remotes.get_mut(&existing) else {
+            return;
+        };
+        let Some(path) = existing_remote.user_display.clone() else {
+            return;
+        };
+
+        existing_remote.request.remote_id = remote_id.clone();
+        if let Err(err) = self.displays.set_remote_id(&path, remote_id).await {
+            tracing::warn!("error pointing the existing session at the new client: {err:?}");
+        }
+        // The new connection's greeter ends on its own once grd moved the client (Logout).
     }
 
     /// The greeter session is gone: forget its display and socket, free its user.
