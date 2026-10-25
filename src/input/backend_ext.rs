@@ -22,6 +22,24 @@ pub trait NiriInputDevice: input::Device {
     // but it's not clear that this matters in practice?
     // it might be more obvious once we implement it for libinput
     fn output(&self, state: &State) -> Option<Output>;
+
+    /// Whether absolute positions from this device are already in global logical coordinates,
+    /// rather than normalized to an output.
+    fn absolute_position_is_global(&self) -> bool {
+        false
+    }
+}
+
+/// Remote desktop (EIS) devices send absolute positions in the global logical coordinates of
+/// the regions we advertise.
+impl NiriInputDevice for smithay::reexports::reis::request::Device {
+    fn output(&self, _: &State) -> Option<Output> {
+        None
+    }
+
+    fn absolute_position_is_global(&self) -> bool {
+        true
+    }
 }
 
 impl NiriInputDevice for libinput::Device {

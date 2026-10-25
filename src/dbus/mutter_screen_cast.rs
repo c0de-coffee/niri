@@ -8,6 +8,7 @@ use zbus::object_server::{InterfaceRef, SignalEmitter};
 use zbus::zvariant::{DeserializeDict, OwnedObjectPath, SerializeDict, Type, Value};
 use zbus::{fdo, interface, ObjectServer};
 
+use super::mutter_remote_desktop::RemoteDesktopSessions;
 use super::{request_name, Start};
 use crate::backend::IpcOutputMap;
 use crate::utils::{CastSessionId, CastStreamId};
@@ -18,6 +19,7 @@ pub struct ScreenCast {
     to_niri: calloop::channel::Sender<ScreenCastToNiri>,
     #[allow(clippy::type_complexity)]
     sessions: Arc<Mutex<Vec<(Session, InterfaceRef<Session>)>>>,
+    remote_desktop_sessions: RemoteDesktopSessions,
 }
 
 #[derive(Clone)]
@@ -28,6 +30,9 @@ pub struct Session {
     #[allow(clippy::type_complexity)]
     streams: Arc<Mutex<Vec<(Stream, InterfaceRef<Stream>)>>>,
     stopped: Arc<AtomicBool>,
+    /// Set when this session was created for a remote desktop session. Such a session is
+    /// started and stopped together with the remote desktop session.
+    remote_desktop_session_id: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Type, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +93,9 @@ struct StreamParameters {
     position: (i32, i32),
     /// Size of the stream in logical coordinates.
     size: (i32, i32),
+    /// Ties the stream to an EIS region with the same mapping ID (the output name).
+    #[zvariant(rename = "mapping-id")]
+    mapping_id: Option<String>,
 }
 
 pub enum ScreenCastToNiri {
@@ -101,6 +109,13 @@ pub enum ScreenCastToNiri {
     StopCast {
         session_id: CastSessionId,
     },
+    StopStream {
+        session_id: CastSessionId,
+        stream_id: CastStreamId,
+    },
+    StopRemoteDesktop {
+        session_id: String,
+    },
 }
 
 #[interface(name = "org.gnome.Mutter.ScreenCast")]
@@ -110,17 +125,42 @@ impl ScreenCast {
         #[zbus(object_server)] server: &ObjectServer,
         properties: HashMap<&str, Value<'_>>,
     ) -> fdo::Result<OwnedObjectPath> {
-        if properties.contains_key("remote-desktop-session-id") {
-            return Err(fdo::Error::Failed(
-                "there are no remote desktop sessions".to_owned(),
-            ));
-        }
+        let remote_desktop_session_id = match properties.get("remote-desktop-session-id") {
+            None => None,
+            Some(Value::Str(id)) => Some(id.to_string()),
+            Some(_) => {
+                return Err(fdo::Error::InvalidArgs(
+                    "remote-desktop-session-id must be a string".to_owned(),
+                ))
+            }
+        };
 
         let session_id = CastSessionId::next();
         let path = format!("/org/gnome/Mutter/ScreenCast/Session/u{}", session_id.get());
         let path = OwnedObjectPath::try_from(path).unwrap();
 
-        let session = Session::new(session_id, self.ipc_outputs.clone(), self.to_niri.clone());
+        let session = Session::new(
+            session_id,
+            self.ipc_outputs.clone(),
+            self.to_niri.clone(),
+            remote_desktop_session_id.clone(),
+        );
+
+        if let Some(rd_id) = &remote_desktop_session_id {
+            let rd_session = self
+                .remote_desktop_sessions
+                .lock()
+                .unwrap()
+                .get(rd_id)
+                .cloned();
+            let Some(rd_session) = rd_session else {
+                return Err(fdo::Error::Failed(
+                    "no such remote desktop session".to_owned(),
+                ));
+            };
+            rd_session.link_cast_session(session.clone())?;
+        }
+
         match server.at(&path, session.clone()).await {
             Ok(true) => {
                 let iface = server.interface(&path).await.unwrap();
@@ -145,12 +185,17 @@ impl ScreenCast {
 
 #[interface(name = "org.gnome.Mutter.ScreenCast.Session")]
 impl Session {
-    async fn start(&self) {
+    async fn start(&self) -> fdo::Result<()> {
         debug!("start");
 
-        for (stream, iface) in &*self.streams.lock().unwrap() {
-            stream.start(iface.signal_emitter().clone());
+        if self.remote_desktop_session_id.is_some() {
+            return Err(fdo::Error::Failed(
+                "must be started through the remote desktop session".to_owned(),
+            ));
         }
+
+        self.start_streams();
+        Ok(())
     }
 
     pub async fn stop(
@@ -173,12 +218,20 @@ impl Session {
             warn!("error sending StopCast to niri: {err:?}");
         }
 
+        if let Some(id) = &self.remote_desktop_session_id {
+            if let Err(err) = self.to_niri.send(ScreenCastToNiri::StopRemoteDesktop {
+                session_id: id.clone(),
+            }) {
+                warn!("error sending StopRemoteDesktop to niri: {err:?}");
+            }
+        }
+
         let streams = mem::take(&mut *self.streams.lock().unwrap());
         for (_, iface) in streams.iter() {
-            server
+            // The stream may have been stopped and removed on its own already.
+            let _ = server
                 .remove::<Stream, _>(iface.signal_emitter().path())
-                .await
-                .unwrap();
+                .await;
         }
 
         server.remove::<Session, _>(ctxt.path()).await.unwrap();
@@ -194,7 +247,17 @@ impl Session {
 
         let output = {
             let ipc_outputs = self.ipc_outputs.lock().unwrap();
-            ipc_outputs.values().find(|o| o.name == connector).cloned()
+            if connector.is_empty() {
+                // Empty connector means the primary monitor (gnome-remote-desktop mirror mode).
+                // niri has no primary monitor, so take the top-left enabled one.
+                ipc_outputs
+                    .values()
+                    .filter_map(|o| o.logical.as_ref().map(|l| (o, (l.y, l.x))))
+                    .min_by_key(|(_, pos)| *pos)
+                    .map(|(o, _)| o.clone())
+            } else {
+                ipc_outputs.values().find(|o| o.name == connector).cloned()
+            }
         };
         let Some(output) = output else {
             return Err(fdo::Error::Failed("no such monitor".to_owned()));
@@ -279,6 +342,30 @@ impl Session {
 
 #[interface(name = "org.gnome.Mutter.ScreenCast.Stream")]
 impl Stream {
+    #[zbus(name = "Start")]
+    async fn start_dbus(&self, #[zbus(signal_context)] ctxt: SignalEmitter<'_>) {
+        debug!(stream_id = %self.id, "stream start");
+        self.start_cast(ctxt.to_owned());
+    }
+
+    #[zbus(name = "Stop")]
+    async fn stop_dbus(
+        &self,
+        #[zbus(object_server)] server: &ObjectServer,
+        #[zbus(signal_context)] ctxt: SignalEmitter<'_>,
+    ) {
+        debug!(stream_id = %self.id, "stream stop");
+
+        if let Err(err) = self.to_niri.send(ScreenCastToNiri::StopStream {
+            session_id: self.session_id,
+            stream_id: self.id,
+        }) {
+            warn!("error sending StopStream to niri: {err:?}");
+        }
+
+        let _ = server.remove::<Stream, _>(ctxt.path()).await;
+    }
+
     #[zbus(signal)]
     pub async fn pipe_wire_stream_added(ctxt: &SignalEmitter<'_>, node_id: u32)
         -> zbus::Result<()>;
@@ -291,6 +378,7 @@ impl Stream {
                 StreamParameters {
                     position: (logical.x, logical.y),
                     size: (logical.width as i32, logical.height as i32),
+                    mapping_id: Some(output.name.clone()),
                 }
             }
             StreamTarget::Window { .. } => {
@@ -298,6 +386,7 @@ impl Stream {
                 StreamParameters {
                     position: (0, 0),
                     size: (1, 1),
+                    mapping_id: None,
                 }
             }
         }
@@ -308,11 +397,13 @@ impl ScreenCast {
     pub fn new(
         ipc_outputs: Arc<Mutex<IpcOutputMap>>,
         to_niri: calloop::channel::Sender<ScreenCastToNiri>,
+        remote_desktop_sessions: RemoteDesktopSessions,
     ) -> Self {
         Self {
             ipc_outputs,
             to_niri,
             sessions: Arc::new(Mutex::new(vec![])),
+            remote_desktop_sessions,
         }
     }
 }
@@ -333,6 +424,7 @@ impl Session {
         id: CastSessionId,
         ipc_outputs: Arc<Mutex<IpcOutputMap>>,
         to_niri: calloop::channel::Sender<ScreenCastToNiri>,
+        remote_desktop_session_id: Option<String>,
     ) -> Self {
         Self {
             id,
@@ -340,6 +432,22 @@ impl Session {
             streams: Arc::new(Mutex::new(vec![])),
             to_niri,
             stopped: Arc::new(AtomicBool::new(false)),
+            remote_desktop_session_id,
+        }
+    }
+
+    pub fn id(&self) -> CastSessionId {
+        self.id
+    }
+
+    pub fn remote_desktop_session_id(&self) -> Option<&str> {
+        self.remote_desktop_session_id.as_deref()
+    }
+
+    /// Starts all streams recorded so far.
+    pub fn start_streams(&self) {
+        for (stream, iface) in &*self.streams.lock().unwrap() {
+            stream.start_cast(iface.signal_emitter().clone());
         }
     }
 }
@@ -370,8 +478,9 @@ impl Stream {
         }
     }
 
-    fn start(&self, ctxt: SignalEmitter<'static>) {
-        if self.was_started.load(Ordering::SeqCst) {
+    fn start_cast(&self, ctxt: SignalEmitter<'static>) {
+        // Both Session.Start and Stream.Start can get here; only start once.
+        if self.was_started.swap(true, Ordering::SeqCst) {
             return;
         }
 

@@ -4331,6 +4331,10 @@ impl State {
         evt: &impl AbsolutePositionEvent<I>,
         fallback_output: Option<&Output>,
     ) -> Option<Point<f64, Logical>> {
+        if evt.device().absolute_position_is_global() {
+            return Some((evt.x(), evt.y()).into());
+        }
+
         let output = evt.device().output(self);
         let output = output.filter(|output| self.niri.output_exists(output));
         let output = output.as_ref().or(fallback_output)?;

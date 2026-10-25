@@ -475,6 +475,13 @@ impl State {
                 }
             }
             ScreenCastToNiri::StopCast { session_id } => self.niri.stop_cast(session_id),
+            ScreenCastToNiri::StopStream {
+                session_id,
+                stream_id,
+            } => self.niri.stop_cast_stream(session_id, stream_id),
+            ScreenCastToNiri::StopRemoteDesktop { session_id } => {
+                self.niri.stop_remote_desktop(&session_id)
+            }
         }
     }
 }
@@ -749,6 +756,27 @@ impl Niri {
                     .stop(server.inner(), iface.signal_emitter().clone())
                     .await
             });
+        }
+    }
+
+    /// Stops a single stream, leaving the rest of its session running.
+    pub fn stop_cast_stream(&mut self, session_id: CastSessionId, stream_id: CastStreamId) {
+        let _span = debug_span!("stop_cast_stream", %session_id, %stream_id).entered();
+
+        self.casting
+            .pending_dynamic_casts
+            .retain(|p| !(p.session_id == session_id && p.stream_id == stream_id));
+
+        let pos = self
+            .casting
+            .casts
+            .iter()
+            .position(|cast| cast.session_id == session_id && cast.stream_id == stream_id);
+        if let Some(pos) = pos {
+            let cast = self.casting.casts.swap_remove(pos);
+            if let Err(err) = cast.stream.disconnect() {
+                warn!("error disconnecting stream: {err:?}");
+            }
         }
     }
 

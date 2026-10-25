@@ -18,7 +18,11 @@ pub mod mutter_display_config;
 pub mod mutter_service_channel;
 
 #[cfg(feature = "xdp-gnome-screencast")]
+pub mod mutter_remote_desktop;
+#[cfg(feature = "xdp-gnome-screencast")]
 pub mod mutter_screen_cast;
+#[cfg(feature = "xdp-gnome-screencast")]
+use mutter_remote_desktop::RemoteDesktop;
 #[cfg(feature = "xdp-gnome-screencast")]
 use mutter_screen_cast::ScreenCast;
 
@@ -40,6 +44,8 @@ pub struct DBusServers {
     pub conn_introspect: Option<Connection>,
     #[cfg(feature = "xdp-gnome-screencast")]
     pub conn_screen_cast: Option<Connection>,
+    #[cfg(feature = "xdp-gnome-screencast")]
+    pub conn_remote_desktop: Option<Connection>,
     pub conn_login1: Option<Connection>,
     pub conn_locale1: Option<Connection>,
     pub conn_a11y_manager: Option<Connection>,
@@ -131,8 +137,26 @@ impl DBusServers {
                         }
                     })
                     .unwrap();
-                let screen_cast = ScreenCast::new(backend.ipc_outputs(), to_niri);
+                let remote_desktop_sessions: mutter_remote_desktop::RemoteDesktopSessions =
+                    Default::default();
+                let screen_cast = ScreenCast::new(
+                    backend.ipc_outputs(),
+                    to_niri,
+                    std::sync::Arc::clone(&remote_desktop_sessions),
+                );
                 dbus.conn_screen_cast = try_start(screen_cast, is_session_instance);
+
+                let (to_niri, from_remote_desktop) = calloop::channel::channel();
+                niri.event_loop
+                    .insert_source(from_remote_desktop, {
+                        move |event, _, state| match event {
+                            calloop::channel::Event::Msg(msg) => state.on_remote_desktop_msg(msg),
+                            calloop::channel::Event::Closed => (),
+                        }
+                    })
+                    .unwrap();
+                let remote_desktop = RemoteDesktop::new(remote_desktop_sessions, to_niri);
+                dbus.conn_remote_desktop = try_start(remote_desktop, is_session_instance);
             }
 
             let (to_niri, from_a11y) = calloop::channel::channel();

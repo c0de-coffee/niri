@@ -465,6 +465,9 @@ pub struct Niri {
 
     #[cfg(feature = "xdp-gnome-screencast")]
     pub casting: Screencasting,
+    /// EIS clients of remote desktop sessions, by session ID.
+    #[cfg(feature = "xdp-gnome-screencast")]
+    pub remote_desktop: HashMap<String, crate::remote_desktop::EisClient>,
 
     #[cfg(test)]
     pub test_action_count: usize,
@@ -2207,6 +2210,9 @@ impl State {
         #[cfg(feature = "dbus")]
         self.niri.on_ipc_outputs_changed();
 
+        #[cfg(feature = "xdp-gnome-screencast")]
+        self.niri.update_eis_regions();
+
         let new_config = self.backend.ipc_outputs().lock().unwrap().clone();
         self.niri.output_management_state.notify_changes(new_config);
     }
@@ -2915,6 +2921,8 @@ impl Niri {
 
             #[cfg(feature = "xdp-gnome-screencast")]
             casting: screencasting,
+            #[cfg(feature = "xdp-gnome-screencast")]
+            remote_desktop: HashMap::new(),
 
             #[cfg(test)]
             test_action_count: 0,
