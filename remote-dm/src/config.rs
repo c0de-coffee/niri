@@ -36,6 +36,9 @@ pub struct Greeter {
 pub struct UserSession {
     /// PAM service for user sessions.
     pub pam_service: String,
+    /// PAM service for users that gnome-remote-desktop already authenticated (Kerberos single
+    /// sign-on): they skip the greeter. Empty: always go through the greeter.
+    pub preauthenticated_pam_service: String,
     /// Command run in user sessions: a headless compositor and `grd --handover`. The greeter's
     /// session command is ignored, it's meant for local sessions.
     pub command: String,
@@ -64,6 +67,7 @@ impl Default for UserSession {
     fn default() -> Self {
         Self {
             pam_service: "remote-dm".to_owned(),
+            preauthenticated_pam_service: "remote-dm-autologin".to_owned(),
             command: "/usr/lib/gnome-remote-desktop-daemon --handover & \
                       exec niri --headless --session"
                 .to_owned(),

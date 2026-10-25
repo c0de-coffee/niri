@@ -1,0 +1,10 @@
+#%PAM-1.0
+# User sessions for users gnome-remote-desktop already authenticated (Kerberos single sign-on):
+# no password here, the rest like a normal remote login.
+auth       required     pam_shells.so
+auth       requisite    pam_nologin.so
+auth       required     pam_permit.so
+auth       required     pam_env.so
+account    include      system-remote-login
+password   required     pam_deny.so
+session    include      system-remote-login

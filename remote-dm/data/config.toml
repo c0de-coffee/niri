@@ -21,6 +21,11 @@
 # PAM service for user sessions (/etc/pam.d/remote-dm).
 # pam-service = "remote-dm"
 
+# PAM service for users gnome-remote-desktop already authenticated with Kerberos (single sign-on,
+# /etc/pam.d/remote-dm-autologin). They skip the greeter and go straight to their session.
+# "" turns this off: everyone goes through the greeter.
+# preauthenticated-pam-service = "remote-dm-autologin"
+
 # Runs in user sessions: a headless compositor and grd --handover. The session the greeter
 # picks is ignored, it's meant for local sessions.
 # command = "/usr/lib/gnome-remote-desktop-daemon --handover & exec niri --headless --session"

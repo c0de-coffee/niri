@@ -15,6 +15,10 @@
 //!    the connection over from the greeter session to the user session; the RDP client reconnects
 //!    once. The greeter's grd calls `Logout`, which ends the greeter session.
 //! 4. When the user session ends, its display object goes away.
+//!
+//! If grd already authenticated the user (Kerberos single sign-on, `preauthenticated-user`), there
+//! is no greeter: the display object gets the user session directly, or the user's existing session
+//! is pointed at the new client.
 
 mod config;
 mod display;
@@ -111,20 +115,27 @@ enum LoginState {
     Started,
 }
 
-/// A user logging in from a remote greeter.
+/// A user logging in from a remote greeter, or preauthenticated by grd.
 struct Login {
     username: String,
     session: Session,
     state: LoginState,
+    /// The logind session, once it's open.
+    session_id: Option<String>,
     /// The greeter request waiting for what PAM does next.
     reply: Option<oneshot::Sender<Response>>,
+}
+
+struct GreeterUser {
+    name: String,
+    uid: u32,
 }
 
 /// One remote connection.
 struct Remote {
     request: RemoteDisplayRequest,
-    greeter_user: String,
-    greeter_uid: u32,
+    /// `None` for preauthenticated users, who skip the greeter.
+    greeter_user: Option<GreeterUser>,
     greeter: Option<Session>,
     greeter_display: Option<OwnedObjectPath>,
     greeter_socket: Option<greeter_ipc::Listener>,
@@ -236,10 +247,17 @@ impl State {
     }
 
     async fn on_remote_display_request(&mut self, request: RemoteDisplayRequest) {
+        if request.preauthenticated_user.is_some()
+            && !self.config.session.preauthenticated_pam_service.is_empty()
+        {
+            self.start_preauthenticated(request).await;
+            return;
+        }
+
         let in_use: Vec<&str> = self
             .remotes
             .values()
-            .map(|r| r.greeter_user.as_str())
+            .filter_map(|r| Some(r.greeter_user.as_ref()?.name.as_str()))
             .collect();
         let free = greeter_users(&self.config.greeter.user_prefix)
             .into_iter()
@@ -311,8 +329,10 @@ impl State {
             remote_key,
             Remote {
                 request,
-                greeter_user,
-                greeter_uid,
+                greeter_user: Some(GreeterUser {
+                    name: greeter_user,
+                    uid: greeter_uid,
+                }),
                 greeter: Some(greeter),
                 greeter_display: Some(path),
                 greeter_socket: socket,
@@ -406,8 +426,18 @@ impl State {
                 }
             }
             WorkerEvent::Opened { session_id } => {
-                tracing::info!(remote = remote_key, session_id, "user session opened, handing over");
-                self.hand_over(remote_key, &session_id).await;
+                login.session_id = Some(session_id.clone());
+                if let Some(path) = &remote.user_display {
+                    // Preauthenticated: the client is still at grd's system daemon, waiting for
+                    // this display to get a session.
+                    tracing::info!(remote = remote_key, session_id, "user session opened");
+                    if let Err(err) = self.displays.set_session_id(path, &session_id).await {
+                        tracing::warn!("error setting session id: {err:?}");
+                    }
+                } else {
+                    tracing::info!(remote = remote_key, session_id, "user session opened, handing over");
+                    self.hand_over(remote_key, &session_id).await;
+                }
             }
             WorkerEvent::Exited { code } => {
                 tracing::info!(remote = remote_key, code, "user session ended");
@@ -480,6 +510,7 @@ impl State {
                                 username,
                                 session,
                                 state: LoginState::Authenticating,
+                                session_id: None,
                                 reply: Some(reply),
                             });
                         }
@@ -568,7 +599,7 @@ impl State {
             let login = remote.login.as_ref()?;
             (key != except
                 && login.username == username
-                && login.state == LoginState::Started
+                && login.session_id.is_some()
                 && remote.user_display.is_some())
             .then_some(key)
         })
@@ -585,6 +616,13 @@ impl State {
         else {
             return;
         };
+        self.point_session_at(existing, remote_id).await;
+        // The new connection's greeter ends on its own once grd moved the client (Logout).
+    }
+
+    /// Points the display of the user session of `existing` at the client `remote_id`, which
+    /// makes grd hand that client over to the session's `grd --handover`.
+    async fn point_session_at(&mut self, existing: u64, remote_id: OwnedObjectPath) {
         let Some(existing_remote) = self.remotes.get_mut(&existing) else {
             return;
         };
@@ -596,7 +634,83 @@ impl State {
         if let Err(err) = self.displays.set_remote_id(&path, remote_id).await {
             tracing::warn!("error pointing the existing session at the new client: {err:?}");
         }
-        // The new connection's greeter ends on its own once grd moved the client (Logout).
+    }
+
+    /// A user grd already authenticated (Kerberos): no greeter, straight to their session, or
+    /// back to the one they have (like GDM's autologin displays).
+    async fn start_preauthenticated(&mut self, request: RemoteDisplayRequest) {
+        let username = request.preauthenticated_user.clone().unwrap();
+
+        // grd refuses root already; don't rely on it.
+        if nix::unistd::User::from_name(&username)
+            .ok()
+            .flatten()
+            .is_none_or(|user| user.uid.is_root())
+        {
+            tracing::warn!(username, "refusing preauthenticated login");
+            return;
+        }
+
+        if let Some(existing) = self.find_user_session(&username, 0) {
+            tracing::info!(existing, username, "preauthenticated user, reconnecting to the existing session");
+            self.point_session_at(existing, request.remote_id).await;
+            return;
+        }
+
+        let path = match self.displays.add(request.remote_id.clone(), "").await {
+            Ok(path) => path,
+            Err(err) => {
+                tracing::warn!("error adding remote display: {err:?}");
+                return;
+            }
+        };
+
+        let worker_request = WorkerRequest {
+            service: self.config.session.preauthenticated_pam_service.clone(),
+            user: username.clone(),
+            class: "user".to_owned(),
+            rhost: request.hostname.clone(),
+            command: Some(self.config.session.command.clone()),
+            env: vec!["XDG_SESSION_DESKTOP=niri".to_owned()],
+        };
+        let remote_key = self.next_key();
+        let session_key = self.next_key();
+        let session =
+            match Session::spawn(&worker_request, session_key, self.session_events.clone()).await {
+                Ok(session) => session,
+                Err(err) => {
+                    tracing::warn!("error starting user session: {err:?}");
+                    let _ = self.displays.remove(&path).await;
+                    return;
+                }
+            };
+        self.sessions.insert(session_key, (remote_key, Role::User));
+
+        tracing::info!(
+            remote = remote_key,
+            %path,
+            remote_id = %request.remote_id,
+            username,
+            "new remote display for a preauthenticated user"
+        );
+        self.remotes.insert(
+            remote_key,
+            Remote {
+                request,
+                greeter_user: None,
+                greeter: None,
+                greeter_display: None,
+                greeter_socket: None,
+                login: Some(Login {
+                    username,
+                    session,
+                    state: LoginState::Started,
+                    session_id: None,
+                    reply: None,
+                }),
+                user_display: Some(path),
+            },
+        );
     }
 
     /// The greeter session is gone: forget its display and socket, free its user.
@@ -610,14 +724,14 @@ impl State {
         if let Some(path) = remote.greeter_display.take() {
             let _ = self.displays.remove(&path).await;
         }
-        let uid = remote.greeter_uid;
+        let uid = remote.greeter_user.as_ref().map(|user| user.uid);
         let has_user_session = remote
             .login
             .as_ref()
             .is_some_and(|login| login.state == LoginState::Started);
 
         // Kill whatever the greeter user still has running, so the next greeter starts clean.
-        if !self.session_bus {
+        if let Some(uid) = uid.filter(|_| !self.session_bus) {
             logind::terminate_user(&self.conn, uid).await;
         }
 

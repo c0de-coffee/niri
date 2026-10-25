@@ -29,8 +29,6 @@ pub struct RemoteDisplayRequest {
     /// Client host name, if grd knows it.
     pub hostname: Option<String>,
     /// User already authenticated by the RDP layer (Kerberos / single sign-on), if any.
-    // TODO: skip the greeter for these.
-    #[allow(dead_code)]
     pub preauthenticated_user: Option<String>,
 }
 

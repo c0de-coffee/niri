@@ -26,6 +26,11 @@ It's the part of GDM that gnome-remote-desktop's remote login mode needs, withou
 4. grd hands the connection over to the user session; the RDP client reconnects once. The greeter
    session ends.
 
+With single sign-on, grd has already authenticated the user with Kerberos and passes the user name
+along (`preauthenticated-user`). remote-dm then skips the greeter, like GDM: it starts the user
+session right away with the `remote-dm-autologin` PAM service (no password), or picks the user's
+existing one.
+
 ## Installing
 
 ```sh
@@ -55,6 +60,7 @@ Installed files:
 | `/usr/lib/tmpfiles.d/remote-dm.conf` | their home directories |
 | `/usr/share/dbus-1/system.d/org.gnome.DisplayManager.conf` | only root may own the name, only grd's system user may call it |
 | `/etc/pam.d/remote-dm`, `/etc/pam.d/remote-dm-greeter` | PAM services for user and greeter sessions |
+| `/etc/pam.d/remote-dm-autologin` | PAM service for users grd already authenticated (single sign-on) |
 | `/etc/remote-dm/config.toml` | configuration (all optional) |
 | `/etc/remote-dm/greeter.kdl` | niri config of greeter sessions (regreet) |
 | `/etc/remote-dm/greeter-noctalia.kdl` | the same with [Noctalia Greeter](https://github.com/noctalia-dev/noctalia-greeter) |
@@ -70,6 +76,15 @@ regreet; to use Noctalia Greeter instead (its client, without its own compositor
 [greeter]
 command = "niri --headless --session -c /etc/remote-dm/greeter-noctalia.kdl"
 ```
+
+Single sign-on needs a Kerberos realm and a keytab for grd's `TERMSRV/<host>` principal:
+
+```sh
+grdctl --system rdp set-kerberos-keytab /path/to/krb5.keytab
+grdctl --system rdp set-auth-methods credentials,kerberos
+```
+
+To always show the greeter instead, set `preauthenticated-pam-service = ""` in `[session]`.
 
 Each greeter user allows one connection at the login screen at a time (concurrent sessions of one
 user would share its session bus); add more to `sysusers.d/remote-dm.conf` for more.
