@@ -3,7 +3,8 @@
 # FreeRDP for N seconds (default 25), then print the interesting logs from both sides.
 # Logs: $OUT/rdp.log (client), $OUT/container.log (journal of remote-dm, grd, greeter sessions).
 DUR=${1:-25}
-OUT=${OUT:-/tmp/claude-1000/-home-coffee/f907843a-d0ec-4338-a9e1-d2bace3cef1f/scratchpad/test}
+OUT=${OUT:-${XDG_CACHE_HOME:-$HOME/.cache}/niri-rl-test}
+mkdir -p "$OUT"
 R=$HOME/.local/share/niri-rl/ssh
 
 $R 'bash /opt/niri/remote-login-tests/container/rdm-run.sh' || exit 1

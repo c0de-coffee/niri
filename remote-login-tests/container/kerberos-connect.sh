@@ -6,7 +6,7 @@
 # Uses its own krb5.conf and credential cache under $OUT; the host's Kerberos setup isn't touched.
 # Set RESTART=0 to keep remote-dm (and its sessions) running.
 DUR=${1:-25}
-OUT=${OUT:-/tmp/claude-1000/-home-coffee/f907843a-d0ec-4338-a9e1-d2bace3cef1f/scratchpad/test}
+OUT=${OUT:-${XDG_CACHE_HOME:-$HOME/.cache}/niri-rl-test}
 R=$HOME/.local/share/niri-rl/ssh
 
 mkdir -p "$OUT"
