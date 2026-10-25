@@ -16,6 +16,8 @@
 >   `remote-login` unit.
 >
 > None of this is upstream; report problems with it here, not to niri.
+>
+> This work was done in collaboration with Claude (Anthropic's AI assistant, via Claude Code).
 
 <h1 align="center"><img alt="niri" src="https://github.com/user-attachments/assets/07d05cd0-d5dc-4a28-9a35-51bae8f119a0"></h1>
 <p align="center">A scrollable-tiling Wayland compositor.</p>
