@@ -1,0 +1,7 @@
+// Same as niri.kdl, plus a terminal that keeps redrawing, so the cast produces frames
+// continuously and buffers get reused (exercises explicit sync release waiting).
+debug {
+    dbus-interfaces-in-non-session-instances
+}
+
+spawn-at-startup "eglgears_wayland"

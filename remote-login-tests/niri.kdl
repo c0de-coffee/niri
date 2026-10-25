@@ -1,0 +1,3 @@
+debug {
+    dbus-interfaces-in-non-session-instances
+}
