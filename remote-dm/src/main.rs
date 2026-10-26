@@ -509,6 +509,8 @@ impl State {
         let Some(greeter) = &mut remote.greeter else {
             return;
         };
+        // grd sends two signals per handover object (interface removed, object unexported).
+        remote.greeter_session_id = None;
 
         tracing::info!(
             remote = remote_key,
