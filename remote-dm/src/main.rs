@@ -115,8 +115,35 @@ enum Role {
 #[derive(Debug, PartialEq, Eq)]
 enum LoginState {
     Authenticating,
+    /// Authenticated, but the user is logged in elsewhere (these sessions): waiting for the user
+    /// to confirm that those get logged out.
+    Confirming(Vec<String>),
     Authenticated,
     Started,
+}
+
+/// The question asked when the user already has a graphical session that isn't ours.
+fn chinese() -> bool {
+    std::env::var("LANG").is_ok_and(|lang| lang.starts_with("zh"))
+}
+
+fn conflict_question(username: &str) -> String {
+    if chinese() {
+        format!(
+            "{username} 已在本机登录。\n继续会注销本机会话，本机未保存的内容都会丢失！\n输入“是”或 yes 继续，输入其他内容取消："
+        )
+    } else {
+        format!(
+            "{username} is logged in on this computer.\nContinuing logs that session out; anything unsaved there is lost!\nType yes to continue, anything else to cancel:"
+        )
+    }
+}
+
+fn is_yes(answer: Option<&str>) -> bool {
+    matches!(
+        answer.map(|a| a.trim().to_lowercase()).as_deref(),
+        Some("yes" | "y" | "是")
+    )
 }
 
 /// A user logging in from a remote greeter, or preauthenticated by grd.
@@ -213,6 +240,15 @@ async fn run(args: Args) -> anyhow::Result<()> {
         .with_context(|| format!("error connecting to the bus as {BUS_NAME}"))?;
     tracing::info!("serving {BUS_NAME}");
 
+    // Greeter users only ever run our greeters: whatever they still have is left over from a
+    // previous run (a restart on upgrade, a crash) and would collide with new greeters.
+    if !session_bus {
+        for (name, uid) in greeter_users(&config.greeter.user_prefix) {
+            tracing::debug!(name, "ending leftover greeter sessions");
+            logind::terminate_user(&conn, uid).await;
+        }
+    }
+
     if let Err(err) = handovers::watch(&conn, handovers_removed_tx).await {
         tracing::warn!("error watching grd's handovers, abandoned greeters won't end: {err:?}");
     }
@@ -261,11 +297,15 @@ impl State {
     }
 
     async fn on_remote_display_request(&mut self, request: RemoteDisplayRequest) {
-        if request.preauthenticated_user.is_some()
-            && !self.config.session.preauthenticated_pam_service.is_empty()
-        {
-            self.start_preauthenticated(request).await;
-            return;
+        if let Some(user) = &request.preauthenticated_user {
+            if !self.config.session.preauthenticated_pam_service.is_empty() {
+                // Logged in elsewhere: there's nothing to ask without a greeter, so go through it.
+                if self.conflicting_sessions(user).await.is_empty() {
+                    self.start_preauthenticated(request).await;
+                    return;
+                }
+                tracing::info!(user, "preauthenticated user is logged in elsewhere, showing the greeter");
+            }
         }
 
         let in_use: Vec<&str> = self
@@ -422,9 +462,31 @@ impl State {
             }
             WorkerEvent::Authenticated => {
                 tracing::info!(remote = remote_key, "user authenticated");
-                login.state = LoginState::Authenticated;
+                let username = login.username.clone();
+                let conflicts = self.conflicting_sessions(&username).await;
+
+                let Some(login) = self.remotes.get_mut(&remote_key).and_then(|r| r.login.as_mut())
+                else {
+                    return;
+                };
+                let response = if conflicts.is_empty() {
+                    login.state = LoginState::Authenticated;
+                    Response::Success
+                } else {
+                    tracing::info!(
+                        remote = remote_key,
+                        username,
+                        ?conflicts,
+                        "user is logged in elsewhere, asking to log that out"
+                    );
+                    login.state = LoginState::Confirming(conflicts);
+                    Response::AuthMessage {
+                        auth_message_type: worker::PromptKind::Visible,
+                        auth_message: conflict_question(&username),
+                    }
+                };
                 if let Some(reply) = login.reply.take() {
-                    let _ = reply.send(Response::Success);
+                    let _ = reply.send(response);
                 }
             }
             WorkerEvent::Failed { error, auth } => {
@@ -572,6 +634,33 @@ impl State {
                     let _ = reply.send(Response::error("no session is being set up"));
                     return;
                 };
+                if let LoginState::Confirming(conflicts) = &login.state {
+                    let conflicts = conflicts.clone();
+                    if is_yes(response.as_deref()) {
+                        tracing::info!(remote = remote_key, ?conflicts, "logging out the user's other sessions");
+                        logind::terminate_sessions_and_wait(&self.conn, &conflicts).await;
+                        if let Some(login) =
+                            self.remotes.get_mut(&remote_key).and_then(|r| r.login.as_mut())
+                        {
+                            login.state = LoginState::Authenticated;
+                        }
+                        let _ = reply.send(Response::Success);
+                    } else {
+                        tracing::info!(remote = remote_key, "login cancelled: user is logged in elsewhere");
+                        if let Some(mut login) = remote.login.take() {
+                            let _ = login.session.send(&WorkerInput::Cancel).await;
+                        }
+                        let _ = reply.send(Response::Error {
+                            error_type: ErrorType::AuthError,
+                            description: if chinese() {
+                                "已取消登录，本机会话保持不变。".to_owned()
+                            } else {
+                                "Login cancelled; the other session was left alone.".to_owned()
+                            },
+                        });
+                    }
+                    return;
+                }
                 if login.state != LoginState::Authenticating {
                     let _ = reply.send(Response::error("not expecting a response"));
                     return;
@@ -636,6 +725,29 @@ impl State {
                     let _ = login.session.send(&WorkerInput::Cancel).await;
                 }
                 let _ = reply.send(Response::Success);
+            }
+        }
+    }
+
+    /// The user's graphical sessions that remote-dm doesn't manage (a local login, say).
+    async fn conflicting_sessions(&self, username: &str) -> Vec<String> {
+        if self.session_bus {
+            return Vec::new();
+        }
+        let Some(uid) = nix::unistd::User::from_name(username).ok().flatten().map(|u| u.uid.as_raw())
+        else {
+            return Vec::new();
+        };
+        let ours: Vec<String> = self
+            .remotes
+            .values()
+            .filter_map(|remote| remote.login.as_ref()?.session_id.clone())
+            .collect();
+        match logind::graphical_sessions(&self.conn, uid, &ours).await {
+            Ok(sessions) => sessions,
+            Err(err) => {
+                tracing::warn!("error listing the user's sessions: {err:?}");
+                Vec::new()
             }
         }
     }
@@ -807,5 +919,21 @@ impl State {
             login.session.terminate();
         }
         self.sessions.retain(|_, (key, _)| *key != remote_key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn yes_answers() {
+        for yes in ["yes", "YES", " y ", "是"] {
+            assert!(is_yes(Some(yes)), "{yes}");
+        }
+        for no in ["no", "", "yess", "否"] {
+            assert!(!is_yes(Some(no)), "{no}");
+        }
+        assert!(!is_yes(None));
     }
 }

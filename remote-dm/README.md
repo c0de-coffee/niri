@@ -31,10 +31,15 @@ Desktop Connection (mstsc) only does that with `use redirection server name:i:1`
 file. If a client doesn't come back within 30 seconds, grd drops it, and remote-dm ends the greeter
 session that was started for it.
 
+A user can't have a remote session while also logged in on the computer itself: one user has one
+session bus, and the two desktops would fight over it. Like GDM, remote-dm asks on the greeter after
+the password whether to log out the other session (anything unsaved there is lost), and cancels the
+login otherwise.
+
 With single sign-on, grd has already authenticated the user with Kerberos and passes the user name
 along (`preauthenticated-user`). remote-dm then skips the greeter, like GDM: it starts the user
 session right away with the `remote-dm-autologin` PAM service (no password), or picks the user's
-existing one.
+existing one. If the user is logged in on the computer itself, the greeter is shown instead, to ask.
 
 ## Installing
 
