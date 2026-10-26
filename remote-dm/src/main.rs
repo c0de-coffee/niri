@@ -16,6 +16,9 @@
 //!    once. The greeter's grd calls `Logout`, which ends the greeter session.
 //! 4. When the user session ends, its display object goes away.
 //!
+//! A client that never reaches its greeter (it doesn't follow grd's redirect) is dropped by grd
+//! after 30 seconds; we then end the greeter session (see `handovers`).
+//!
 //! If grd already authenticated the user (Kerberos single sign-on, `preauthenticated-user`), there
 //! is no greeter: the display object gets the user session directly, or the user's existing session
 //! is pointed at the new client.
@@ -23,6 +26,7 @@
 mod config;
 mod display;
 mod greeter_ipc;
+mod handovers;
 mod logind;
 // Copied from greetd as is, including a few methods we don't use.
 #[allow(dead_code)]
@@ -138,9 +142,13 @@ struct Remote {
     greeter_user: Option<GreeterUser>,
     greeter: Option<Session>,
     greeter_display: Option<OwnedObjectPath>,
+    /// The greeter's logind session, once it's open.
+    greeter_session_id: Option<String>,
     greeter_socket: Option<greeter_ipc::Listener>,
     login: Option<Login>,
     user_display: Option<OwnedObjectPath>,
+    /// The client is on its way from the greeter to a user session; the greeter ends on its own.
+    handed_over: bool,
 }
 
 struct State {
@@ -188,6 +196,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
     let (requests_tx, mut requests) = mpsc::unbounded_channel();
     let (session_events_tx, mut session_events) = mpsc::unbounded_channel();
     let (greeter_requests_tx, mut greeter_requests) = mpsc::unbounded_channel();
+    let (handovers_removed_tx, mut handovers_removed) = mpsc::unbounded_channel();
 
     let builder = if session_bus {
         zbus::connection::Builder::session()?
@@ -203,6 +212,10 @@ async fn run(args: Args) -> anyhow::Result<()> {
         .await
         .with_context(|| format!("error connecting to the bus as {BUS_NAME}"))?;
     tracing::info!("serving {BUS_NAME}");
+
+    if let Err(err) = handovers::watch(&conn, handovers_removed_tx).await {
+        tracing::warn!("error watching grd's handovers, abandoned greeters won't end: {err:?}");
+    }
 
     let mut state = State {
         session_bus,
@@ -222,6 +235,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
             Some(request) = requests.recv() => state.on_remote_display_request(request).await,
             Some((key, event)) = session_events.recv() => state.on_session_event(key, event).await,
             Some(request) = greeter_requests.recv() => state.on_greeter_request(request).await,
+            Some(session_id) = handovers_removed.recv() => state.on_handover_removed(&session_id),
             _ = sigterm.recv() => break,
             _ = tokio::signal::ctrl_c() => break,
         }
@@ -335,9 +349,11 @@ impl State {
                 }),
                 greeter: Some(greeter),
                 greeter_display: Some(path),
+                greeter_session_id: None,
                 greeter_socket: socket,
                 login: None,
                 user_display: None,
+                handed_over: false,
             },
         );
     }
@@ -363,6 +379,7 @@ impl State {
         match event {
             WorkerEvent::Opened { session_id } => {
                 tracing::info!(remote = remote_key, session_id, "greeter session opened");
+                remote.greeter_session_id = Some(session_id.clone());
                 if let Some(path) = &remote.greeter_display {
                     if let Err(err) = self.displays.set_session_id(path, &session_id).await {
                         tracing::warn!("error setting session id: {err:?}");
@@ -470,7 +487,35 @@ impl State {
 
         if let Some(remote) = self.remotes.get_mut(&remote_key) {
             remote.user_display = Some(path);
+            remote.handed_over = true;
         }
+    }
+
+    /// grd removed the handover object of a session. If that's a greeter the client never got to,
+    /// grd gave up on the client, and nothing else would end the greeter.
+    fn on_handover_removed(&mut self, session_id: &str) {
+        let Some((&remote_key, remote)) = self.remotes.iter_mut().find(|(_, remote)| {
+            remote.greeter_session_id.as_deref() == Some(session_id)
+        }) else {
+            return;
+        };
+        let logging_in = remote
+            .login
+            .as_ref()
+            .is_some_and(|login| login.state == LoginState::Started);
+        if remote.handed_over || logging_in {
+            return;
+        }
+        let Some(greeter) = &mut remote.greeter else {
+            return;
+        };
+
+        tracing::info!(
+            remote = remote_key,
+            session_id,
+            "grd dropped the client of this greeter, ending it"
+        );
+        greeter.terminate();
     }
 
     async fn on_greeter_request(&mut self, request: GreeterRequest) {
@@ -609,13 +654,11 @@ impl State {
     /// `existing`: pointing the existing session's display at the new client makes grd hand the
     /// client over to that session's `grd --handover`.
     async fn reconnect(&mut self, remote_key: u64, existing: u64) {
-        let Some(remote_id) = self
-            .remotes
-            .get(&remote_key)
-            .map(|remote| remote.request.remote_id.clone())
-        else {
+        let Some(remote) = self.remotes.get_mut(&remote_key) else {
             return;
         };
+        remote.handed_over = true;
+        let remote_id = remote.request.remote_id.clone();
         self.point_session_at(existing, remote_id).await;
         // The new connection's greeter ends on its own once grd moved the client (Logout).
     }
@@ -700,6 +743,7 @@ impl State {
                 greeter_user: None,
                 greeter: None,
                 greeter_display: None,
+                greeter_session_id: None,
                 greeter_socket: None,
                 login: Some(Login {
                     username,
@@ -709,6 +753,7 @@ impl State {
                     reply: None,
                 }),
                 user_display: Some(path),
+                handed_over: false,
             },
         );
     }

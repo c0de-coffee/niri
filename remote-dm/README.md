@@ -26,6 +26,11 @@ It's the part of GDM that gnome-remote-desktop's remote login mode needs, withou
 4. grd hands the connection over to the user session; the RDP client reconnects once. The greeter
    session ends.
 
+Each handover makes the RDP client reconnect, following grd's server redirection. Windows' Remote
+Desktop Connection (mstsc) only does that with `use redirection server name:i:1` in its `.rdp`
+file. If a client doesn't come back within 30 seconds, grd drops it, and remote-dm ends the greeter
+session that was started for it.
+
 With single sign-on, grd has already authenticated the user with Kerberos and passes the user name
 along (`preauthenticated-user`). remote-dm then skips the greeter, like GDM: it starts the user
 session right away with the `remote-dm-autologin` PAM service (no password), or picks the user's
