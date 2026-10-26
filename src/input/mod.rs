@@ -175,7 +175,11 @@ impl State {
         match event {
             DeviceAdded { device } => self.on_device_added(device),
             DeviceRemoved { device } => self.on_device_removed(device),
-            Keyboard { event } => self.on_keyboard::<I>(event, &mut consumed_by_a11y),
+            Keyboard { event } => {
+                self.on_keyboard::<I>(event, &mut consumed_by_a11y);
+                #[cfg(feature = "xdp-gnome-screencast")]
+                self.niri.sync_eis_modifiers();
+            }
             PointerMotion { event } => self.on_pointer_motion::<I>(event),
             PointerMotionAbsolute { event } => self.on_pointer_motion_absolute::<I>(event),
             PointerButton { event } => self.on_pointer_button::<I>(event),

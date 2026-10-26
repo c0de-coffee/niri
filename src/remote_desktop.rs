@@ -20,7 +20,12 @@ use crate::niri::{Niri, State};
 pub struct EisClient {
     token: RegistrationToken,
     seat: Option<EiInputSeat>,
+    /// Keyboard modifiers last sent to the client.
+    sent_modifiers: Option<Modifiers>,
 }
+
+/// Serialized xkb modifiers: depressed, latched, locked, layout.
+type Modifiers = (u32, u32, u32, u32);
 
 impl State {
     pub fn on_remote_desktop_msg(&mut self, msg: RemoteDesktopToNiri) {
@@ -41,7 +46,11 @@ impl State {
                     });
                 match res {
                     Ok(token) => {
-                        let client = EisClient { token, seat: None };
+                        let client = EisClient {
+                            token,
+                            seat: None,
+                            sent_modifiers: None,
+                        };
                         self.niri.remote_desktop.insert(session_id, client);
                     }
                     Err(err) => {
@@ -135,7 +144,18 @@ impl State {
                 debug!(session_id, "EIS client disconnected");
                 self.niri.stop_remote_desktop(session_id);
             }
-            EiInputEvent::Event(event) => self.process_input_event(event),
+            EiInputEvent::Event(event) => {
+                let device_added = matches!(event, smithay::backend::input::InputEvent::DeviceAdded { .. });
+                self.process_input_event(event);
+                if device_added {
+                    // The keyboard device exists now: tell the client the current modifiers
+                    // (lock keys included), so that it doesn't assume everything is off.
+                    if let Some(client) = self.niri.remote_desktop.get_mut(session_id) {
+                        client.sent_modifiers = None;
+                    }
+                    self.niri.sync_eis_modifiers();
+                }
+            }
             EiInputEvent::TextKeysym { .. } | EiInputEvent::TextUtf8 { .. } => {
                 // We don't add a text device to the seat.
             }
@@ -158,6 +178,34 @@ impl Niri {
                 }
             })
             .collect()
+    }
+
+    /// Sends the keyboard modifiers to EIS clients that haven't seen them yet.
+    ///
+    /// grd learns the Caps Lock / Num Lock state only from these: when the RDP client says its
+    /// lock keys are on or off (on connect and whenever its window gets focus), grd compares that
+    /// against this state and presses the lock key if they differ. Without them grd assumes both
+    /// are off, and toggles them on every sync.
+    pub fn sync_eis_modifiers(&mut self) {
+        if self.remote_desktop.is_empty() {
+            return;
+        }
+        let Some(keyboard) = self.seat.get_keyboard() else {
+            return;
+        };
+        let mods = keyboard.modifier_state().serialized;
+        let mods: Modifiers = (mods.depressed, mods.latched, mods.locked, mods.layout_effective);
+
+        for client in self.remote_desktop.values_mut() {
+            if client.sent_modifiers == Some(mods) {
+                continue;
+            }
+            if let Some(seat) = &client.seat {
+                let (depressed, latched, locked, group) = mods;
+                seat.keyboard_modifiers(depressed, locked, latched, group);
+                client.sent_modifiers = Some(mods);
+            }
+        }
     }
 
     pub fn update_eis_regions(&self) {
