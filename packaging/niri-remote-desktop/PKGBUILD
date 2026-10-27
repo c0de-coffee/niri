@@ -5,8 +5,8 @@
 # of https://github.com/c0de-coffee/niri-remote (remote-desktop branch). Based on Arch's niri PKGBUILD.
 
 pkgname=niri-remote-desktop
-_tag=v26.04-rd1
-pkgver=26.04.rd1
+_tag=v26.04-rd2
+pkgver=26.04.rd2
 pkgrel=1
 pkgdesc="A scrollable-tiling Wayland compositor (with remote desktop support)"
 arch=(x86_64)
@@ -43,7 +43,7 @@ optdepends=(
 provides=(niri wayland-compositor)
 conflicts=(niri niri-remote-desktop-git)
 source=("niri-$_tag.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
-sha256sums=('8a16d15c5343848b83f5ef8df9a1b2b0f713175db5c21cb26593aa4af8421ffd')
+sha256sums=('7486cb0ba5791e6dd944c884e75690e516354b72fedc648e696e73e510b51bfe')
 
 _srcdir() {
   printf 'niri-remote-%s' "${_tag#v}"
@@ -78,7 +78,7 @@ package() {
   install -vDm 644 resources/niri{.service,-shutdown.target} -t "$pkgdir/usr/lib/systemd/user/"
   install -vDm 644 resources/niri.desktop -t "$pkgdir/usr/share/wayland-sessions/"
   install -vDm 644 resources/niri-portals.conf -t "$pkgdir/usr/share/xdg-desktop-portal/"
-  install -vDm 644 resources/default-config.kdl README.md -t "$pkgdir/usr/share/doc/niri/"
+  install -vDm 644 resources/default-config.kdl README.md README.zh-CN.md -t "$pkgdir/usr/share/doc/niri/"
   install -vDm 644 bash-completions "$pkgdir/usr/share/bash-completion/completions/niri"
   install -vDm 644 fish-completions "$pkgdir/usr/share/fish/vendor_completions.d/niri.fish"
   install -vDm 644 zsh-completions "$pkgdir/usr/share/zsh/site-functions/_niri"

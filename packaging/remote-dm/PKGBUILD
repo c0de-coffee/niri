@@ -5,8 +5,8 @@
 # https://github.com/c0de-coffee/niri-remote (remote-dm/ on the remote-desktop branch).
 
 pkgname=remote-dm
-pkgver=0.1.0
-_tag=v26.04-rd1
+pkgver=0.2.0
+_tag=v26.04-rd2
 pkgrel=1
 pkgdesc="Display manager for remote logins with gnome-remote-desktop"
 arch=(x86_64)
@@ -38,7 +38,7 @@ backup=(
   etc/remote-dm/greeter-noctalia.kdl
 )
 source=("niri-$_tag.tar.gz::https://github.com/c0de-coffee/niri-remote/archive/refs/tags/$_tag.tar.gz")
-sha256sums=('8a16d15c5343848b83f5ef8df9a1b2b0f713175db5c21cb26593aa4af8421ffd')
+sha256sums=('7486cb0ba5791e6dd944c884e75690e516354b72fedc648e696e73e510b51bfe')
 
 _srcdir() {
   printf 'niri-remote-%s/remote-dm' "${_tag#v}"
@@ -57,5 +57,5 @@ build() {
 package() {
   cd "$(_srcdir)"
   DESTDIR="$pkgdir" ./install.sh --no-build > /dev/null
-  install -vDm 644 README.md -t "$pkgdir/usr/share/doc/remote-dm/"
+  install -vDm 644 README.md README.zh-CN.md -t "$pkgdir/usr/share/doc/remote-dm/"
 }
