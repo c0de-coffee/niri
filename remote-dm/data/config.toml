@@ -28,4 +28,4 @@
 
 # Runs in user sessions: a headless compositor and grd --handover. The session the greeter
 # picks is ignored, it's meant for local sessions.
-# command = "systemctl --user start gnome-remote-desktop-handover.service; exec niri --headless --session"
+# command = "systemctl --user restart gnome-remote-desktop-handover.service; exec niri --headless --session"

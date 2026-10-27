@@ -128,14 +128,12 @@ fn chinese() -> bool {
 }
 
 fn conflict_question(username: &str) -> String {
+    // One short line: Noctalia Greeter shows prompts in a single status line under the password
+    // field and doesn't wrap. "是" is still accepted, but greeters have no input method.
     if chinese() {
-        format!(
-            "{username} 已在本机登录。\n继续会注销本机会话，本机未保存的内容都会丢失！\n输入“是”或 yes 继续，输入其他内容取消："
-        )
+        format!("{username} 已在本机登录。输入 yes 注销本机并继续（未保存的会丢失）")
     } else {
-        format!(
-            "{username} is logged in on this computer.\nContinuing logs that session out; anything unsaved there is lost!\nType yes to continue, anything else to cancel:"
-        )
+        format!("{username} is logged in here. Type yes to log that out (unsaved work is lost)")
     }
 }
 
@@ -639,6 +637,7 @@ impl State {
                     if is_yes(response.as_deref()) {
                         tracing::info!(remote = remote_key, ?conflicts, "logging out the user's other sessions");
                         logind::terminate_sessions_and_wait(&self.conn, &conflicts).await;
+                        logind::stop_graphical_session(&login.username).await;
                         if let Some(login) =
                             self.remotes.get_mut(&remote_key).and_then(|r| r.login.as_mut())
                         {

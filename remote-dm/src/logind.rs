@@ -91,6 +91,26 @@ pub async fn terminate_sessions_and_wait(system_bus: &Connection, ids: &[String]
     tracing::warn!(?ids, "sessions still there after terminating them");
 }
 
+/// Stops the graphical session in the user's systemd user instance.
+///
+/// Ending a logind session only kills its scope. Compositors started as user services
+/// (`niri-session` runs `niri.service`) are outside of it and keep running, still owning the
+/// session bus names the next compositor needs, so stop `graphical-session.target`, which they're
+/// bound to. Only call this when the user has no other graphical session left.
+pub async fn stop_graphical_session(username: &str) {
+    let mut command = tokio::process::Command::new("systemctl");
+    command
+        .arg(format!("--machine={username}@"))
+        .args(["--user", "stop", "graphical-session.target", "graphical-session-pre.target"])
+        .kill_on_drop(true);
+    match tokio::time::timeout(Duration::from_secs(20), command.status()).await {
+        Ok(Ok(status)) if status.success() => {}
+        Ok(Ok(status)) => tracing::warn!(username, "stopping the graphical session: systemctl {status}"),
+        Ok(Err(err)) => tracing::warn!(username, "error running systemctl: {err}"),
+        Err(_) => tracing::warn!(username, "stopping the graphical session timed out"),
+    }
+}
+
 /// Kills everything the user still has running (systemd user instance included).
 ///
 /// Greeter users are ours and run nothing else; their processes can outlive the session (apps in

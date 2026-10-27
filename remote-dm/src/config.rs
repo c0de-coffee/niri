@@ -68,7 +68,12 @@ impl Default for UserSession {
         Self {
             pam_service: "remote-dm".to_owned(),
             preauthenticated_pam_service: "remote-dm-autologin".to_owned(),
-            command: "systemctl --user start gnome-remote-desktop-handover.service; \
+            // Restart, not start: a handover daemon left from an earlier session of this user (the
+            // systemd user instance outlives sessions while the user has any other) only answers
+            // handovers of its own logind session, which a user service doesn't have, so it would
+            // ignore ours. A freshly started one asks grd for the handover right away, and grd
+            // finds the session from its uid.
+            command: "systemctl --user restart gnome-remote-desktop-handover.service; \
                       exec niri --headless --session"
                 .to_owned(),
         }
