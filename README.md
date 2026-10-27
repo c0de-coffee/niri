@@ -1,163 +1,112 @@
+<div align="right">
+  <strong>English</strong> | <a href="README.zh-CN.md">简体中文</a>
+</div>
+
+# niri with remote login
+
 > [!NOTE]
-> **This is a fork** of [niri](https://github.com/niri-wm/niri) by Ivan Molodetskikh (YaLTeR), maintained by
-> [c0de-coffee](https://github.com/c0de-coffee). Below this note is the original README.
+> This is a fork of [niri-wm/niri](https://github.com/niri-wm/niri) by Ivan Molodetskikh (YaLTeR),
+> maintained by [c0de-coffee](https://github.com/c0de-coffee). **For what niri is, its
+> documentation and configuration, see the original repository:** https://github.com/niri-wm/niri.
+> This README only covers what the fork adds.
 >
-> The `remote-desktop` branch adds GNOME-style RDP remote login with an unmodified
-> gnome-remote-desktop:
+> Report problems with remote login here, not to niri.
 >
-> - niri implements mutter's `org.gnome.Mutter.RemoteDesktop` (input through libei, clipboard) and
->   `ScreenCast.RecordVirtual` (virtual outputs that follow the client's size), and `--headless`
->   runs with a GPU and no outputs.
-> - [`remote-dm/`](remote-dm/README.md) is a display manager just for remote logins: it stands in for
->   GDM towards gnome-remote-desktop and speaks greetd's protocol towards greeters. Each connection
->   gets a login screen, then the user's own headless niri session, which survives disconnects.
-> - Arch packages: [`packaging/`](packaging/) (`niri-remote-desktop-git`, `remote-dm-git`).
->   [Nyxuri-remote](https://github.com/c0de-coffee/Nyxuri-remote) sets everything up as its
->   `remote-login` unit.
->
-> None of this is upstream; report problems with it here, not to niri.
->
-> This work was done in collaboration with Claude (Anthropic's AI assistant, via Claude Code).
+> This fork was built with Claude.
 
-<h1 align="center"><img alt="niri" src="https://github.com/user-attachments/assets/07d05cd0-d5dc-4a28-9a35-51bae8f119a0"></h1>
-<p align="center">A scrollable-tiling Wayland compositor.</p>
-<p align="center">
-    <a href="https://matrix.to/#/#niri:matrix.org"><img alt="Matrix" src="https://img.shields.io/badge/matrix-%23niri-blue?logo=matrix"></a>
-    <a href="https://github.com/niri-wm/niri/blob/main/LICENSE"><img alt="GitHub License" src="https://img.shields.io/github/license/niri-wm/niri"></a>
-    <a href="https://github.com/niri-wm/niri/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/niri-wm/niri?logo=github"></a>
-</p>
+## What the fork adds
 
-<p align="center">
-    <a href="https://niri-wm.github.io/niri/Getting-Started.html">Getting Started</a> | <a href="https://niri-wm.github.io/niri/Configuration%3A-Introduction.html">Configuration</a> | <a href="https://github.com/niri-wm/niri/discussions/325">Setup&nbsp;Showcase</a>
-</p>
+GNOME-style **remote login over RDP** for niri:
 
-<img width="1280" height="720" alt="niri with a few windows open" src="https://github.com/user-attachments/assets/dea5909e-1859-4aaa-9d88-d37f9663e00b" />
+- Connect with a remote desktop client, get a login screen, log in with your system account, and
+  land in **your own niri session**.
+- Remote sessions are headless: they don't use or show up on the computer's own screens.
+- Sessions keep running when you disconnect; connecting again brings you back to yours.
+- Several users can be logged in remotely at once, each in their own session.
+- The server side is the gnome-remote-desktop package from Arch's repositories; remote login
+  doesn't need it modified. Two optional patches fix non-ASCII clipboard text and the
+  multi-monitor layout (see [Known issues](#known-issues-and-limitations)).
 
-## About
+It has two parts:
 
-Windows are arranged in columns on an infinite strip going to the right.
-Opening a new window never causes existing windows to resize.
+1. **niri** (the `remote-desktop` branch) adds:
+   - mutter's `org.gnome.Mutter.RemoteDesktop`: keyboard and pointer input through libei,
+     clipboard, Caps Lock and Num Lock state.
+   - `org.gnome.Mutter.ScreenCast.RecordVirtual`: virtual outputs that follow the client's window
+     size; one per monitor when the client uses several, at that monitor's scale.
+   - `niri --headless`: renders on the GPU without any physical outputs.
+   - Used locally, it behaves like regular niri.
+2. **[remote-dm](remote-dm/README.md)**: a display manager just for remote logins. It stands in
+   for GDM towards gnome-remote-desktop and for greetd towards greeters. How a connection goes,
+   client setup and troubleshooting are in its README.
 
-Every monitor has its own separate window strip.
-Windows can never "overflow" onto an adjacent monitor.
+## Quick start (Arch Linux)
 
-Workspaces are dynamic and arranged vertically.
-Every monitor has an independent set of workspaces, and there's always one empty workspace present all the way down.
+1. **Install the packages**: download `niri-remote-desktop` and `remote-dm` from
+   [Releases](https://github.com/c0de-coffee/niri/releases), then:
 
-The workspace arrangement is preserved across disconnecting and connecting monitors where it makes sense.
-When a monitor disconnects, its workspaces will move to another monitor, but upon reconnection they will move back to the original monitor.
+   ```sh
+   sudo pacman -U niri-remote-desktop-*.pkg.tar.zst remote-dm-*.pkg.tar.zst
+   ```
 
-## Features
+   `niri-remote-desktop` replaces the `niri` package. To build them yourself, use the PKGBUILDs in
+   [`packaging/`](packaging/): `niri-remote-desktop` and `remote-dm` build the release,
+   `*-git` the latest commit of the branch.
 
-- Built from the ground up for scrollable tiling
-- [Dynamic workspaces](https://niri-wm.github.io/niri/Workspaces.html) like in GNOME
-- An [Overview](https://github.com/user-attachments/assets/379a5d1f-acdb-4c11-b36c-e85fd91f0995) that zooms out workspaces and windows
-- Built-in screenshot UI
-- Monitor and window screencasting through xdg-desktop-portal-gnome
-    - You can [block out](https://niri-wm.github.io/niri/Configuration%3A-Window-Rules.html#block-out-from) sensitive windows from screencasts
-    - [Dynamic cast target](https://niri-wm.github.io/niri/Screencasting.html#dynamic-screencast-target) that can change what it shows on the go
-- [Touchpad](https://github.com/niri-wm/niri/assets/1794388/946a910e-9bec-4cd1-a923-4a9421707515) and [mouse](https://github.com/niri-wm/niri/assets/1794388/8464e65d-4bf2-44fa-8c8e-5883355bd000) gestures
-- Group windows into [tabs](https://niri-wm.github.io/niri/Tabs.html)
-- Configurable layout: gaps, borders, struts, window sizes
-- [Gradient borders](https://niri-wm.github.io/niri/Configuration%3A-Layout.html#gradients) with Oklab and Oklch support
-- [Background blur](https://niri-wm.github.io/niri/Window-Effects.html) for windows and layer-shell surfaces
-- [Animations](https://github.com/niri-wm/niri/assets/1794388/ce178da2-af9e-4c51-876f-8709c241d95e) with support for [custom shaders](https://github.com/niri-wm/niri/assets/1794388/27a238d6-0a22-4692-b794-30dc7a626fad)
-- Live-reloading config
-- Works with [screen readers](https://niri-wm.github.io/niri/Accessibility.html)
+2. **Set it up**: set up gnome-remote-desktop and enable remote-dm as in
+   [remote-dm's README](remote-dm/README.md#installing).
 
-## Video Demo
+   If you manage your desktop with Nyxuri, my Nyxuri fork
+   [c0de-coffee/Nyxuri-remote](https://github.com/c0de-coffee/Nyxuri-remote) can do it for you
+   (the original Nyxuri can't): `nyxuri on remote-login` does the setup above and adds a settings
+   panel to Noctalia.
 
-https://github.com/niri-wm/niri/assets/1794388/bce834b0-f205-434e-a027-b373495f9729
+3. **Connect**: see [Connecting](remote-dm/README.md#connecting). Windows' Remote Desktop
+   Connection needs one extra line in its `.rdp` file, or it can't get through.
 
-Also check out these videos that showcase a lot of the niri functionality:
+## Known issues and limitations
 
-- [Niri Is My New Favorite Wayland Compositor](https://www.youtube.com/watch?v=DeYx2exm04M) by Brodie Robertson
-- [How Is niri This Good? Live Demo + Config](https://www.youtube.com/watch?v=7XmD5UyyhZQ) by Nick Janetakis
+- **One user can't be logged in locally and remotely at the same time**: both desktops would
+  fight over the user's session bus. When you log in remotely while logged in locally, the login
+  screen asks after the password whether to log out the local session, and cancels the login
+  otherwise. GNOME's login screen (since GNOME 46) also asks first, and only "Force Stop" logs the
+  local session out.
+- **Multiple monitors**: with a multi-monitor client, the remote desktop spans all of the client's
+  monitors, each at the scale it has on the client (GNOME's remote login supports this too;
+  gnome-remote-desktop allows up to 16). Unpatched gnome-remote-desktop doesn't tell the
+  compositor how the client's monitors are arranged or which one is primary (GNOME has the same
+  problem), so niri lays them out left to right in the order the client lists them. Then actions
+  like "focus monitor left/right" may go the opposite way from what you see, and the login screen
+  may open on a monitor other than the primary one. Moving the pointer between monitors isn't
+  affected. The optional gnome-remote-desktop patch `0002` in
+  [`patches/gnome-remote-desktop/`](patches/gnome-remote-desktop/) fixes this: niri then arranges
+  the monitors as in the client's display settings and opens windows on its primary monitor.
+- **Clipboard with non-ASCII text**: in text copied on the client, every character outside ASCII
+  (Chinese, accented letters, emoji, …) shows up remotely as escapes like
+  `\u6d4b\u8bd5`. That's a bug in gnome-remote-desktop 51 itself (showing up with FreeRDP 3.32 or
+  later); it happens with GNOME too and has nothing to do with this fork. Remote login works
+  without fixing it. To fix it, rebuild gnome-remote-desktop with the patches in
+  [`patches/gnome-remote-desktop/`](patches/gnome-remote-desktop/):
+  [`packaging/gnome-remote-desktop/build.sh`](packaging/gnome-remote-desktop/build.sh) does it on
+  Arch (it applies both patches).
+- Packages are for Arch Linux only.
 
-## Status
+## What else is in the repository
 
-Niri is stable for day-to-day use and does most things expected of a Wayland compositor.
-Many people are daily-driving niri, and are happy to help in our [Matrix channel].
+| Directory | |
+|---|---|
+| [`remote-dm/`](remote-dm/) | the remote login display manager |
+| [`packaging/`](packaging/) | Arch PKGBUILDs |
+| [`patches/`](patches/) | patches for gnome-remote-desktop |
+| [`remote-login-tests/`](remote-login-tests/) | test scripts, including a systemd-nspawn test container |
 
-Give it a try!
-Follow the instructions on the [Getting Started](https://niri-wm.github.io/niri/Getting-Started.html) page.
-Grab a desktop shell like [DankMaterialShell] or [Noctalia] (or build a more traditional setup): niri by itself is not a complete desktop environment.
-Also check out [awesome-niri], a list of niri-related links and projects.
+## License and credits
 
-Here are some points you may have questions about:
+GPL-3.0-or-later, like niri; remote-dm is GPL-3.0-only (it contains code from greetd).
 
-- **Multi-monitor**: yes, a core part of the design from the very start. Mixed DPI works.
-- **Fractional scaling**: yes, plus all niri UI stays pixel-perfect.
-- **NVIDIA**: seems to work fine.
-- **Floating windows**: yes, starting from niri 25.01.
-- **Input devices**: niri supports tablets, touchpads, and touchscreens.
-You can map the tablet to a specific monitor, or use [OpenTabletDriver].
-We have touchpad gestures, but no touchscreen gestures yet.
-- **Wlr protocols**: yes, we have most of the important ones like layer-shell, gamma-control, screencopy.
-You can check on [wayland.app](https://wayland.app) at the bottom of each protocol's page.
-- **Performance**: while I run niri on beefy machines, I try to stay conscious of performance.
-I've seen someone use it fine on an Eee PC 900 from 2008, of all things.
-- **Xwayland**: [integrated](https://niri-wm.github.io/niri/Xwayland.html#using-xwayland-satellite) via xwayland-satellite starting from niri 25.08.
-
-## Media
-
-[niri: Making a Wayland compositor in Rust](https://youtu.be/Kmz8ODolnDg?list=PLRdS-n5seLRqrmWDQY4KDqtRMfIwU0U3T) · *December 2024*
-
-My talk from the 2024 Moscow RustCon about niri, and how I do randomized property testing and profiling, and measure input latency.
-The talk is in Russian, but I prepared full English subtitles that you can find in YouTube's subtitle language selector.
-
-[An interview with Ivan, the developer behind Niri](https://www.trommelspeicher.de/podcast/special_the_developer_behind_niri) · *June 2025*
-
-An interview by a German tech podcast Das Triumvirat (in English).
-We talk about niri development and history, and my experience building and maintaining niri.
-
-[A tour of the niri scrolling-tiling Wayland compositor](https://lwn.net/Articles/1025866/) · *July 2025*
-
-An LWN article with a nice overview and introduction to niri.
-
-[How to test a Wayland compositor?](https://youtu.be/w44fYK5z418?list=PLK4NE4dSsLlw) · *October 2026*
-
-My talk about some testing techniques used in niri: property-based tests, snapshot tests, client-server tests.
-The first half overlaps with my RustCon talk, the second half is new.
-The talk is in Russian, but I prepared full English subtitles that you can find in YouTube's subtitle language selector.
-
-## Contributing
-
-If you'd like to help with niri, there are plenty of both coding- and non-coding-related ways to do so.
-See [CONTRIBUTING.md](https://github.com/niri-wm/niri/blob/main/CONTRIBUTING.md) for an overview.
-
-## Inspiration
-
-Niri is heavily inspired by [PaperWM] which implements scrollable tiling on top of GNOME Shell.
-
-One of the reasons that prompted me to try writing my own compositor is being able to properly separate the monitors.
-Being a GNOME Shell extension, PaperWM has to work against Shell's global window coordinate space to prevent windows from overflowing.
-
-## Tile Scrollably Elsewhere
-
-Here are some other projects which implement a similar workflow:
-
-- [PaperWM]: scrollable tiling on top of GNOME Shell.
-- [karousel]: scrollable tiling on top of KDE.
-- [scroll](https://github.com/dawsers/scroll) and [papersway]: scrollable tiling on top of sway/i3.
-- Hyprland has a built-in [scrolling layout](https://wiki.hypr.land/Configuring/Layouts/Scrolling-Layout/).
-- [Paneru] and [PaperWM.spoon]: scrollable tiling on top of macOS.
-
-## Contact
-
-Our main communication channel is a Matrix chat, feel free to join and ask a question: https://matrix.to/#/#niri:matrix.org
-
-We also have a community Discord server: https://discord.gg/vT8Sfjy7sx
-
-[PaperWM]: https://github.com/paperwm/PaperWM
-[waybar]: https://github.com/Alexays/Waybar
-[fuzzel]: https://codeberg.org/dnkl/fuzzel
-[awesome-niri]: https://github.com/niri-wm/awesome-niri
-[karousel]: https://github.com/peterfajdiga/karousel
-[papersway]: https://spwhitton.name/tech/code/papersway/
-[Paneru]: https://github.com/karinushka/paneru
-[PaperWM.spoon]: https://github.com/mogenson/PaperWM.spoon
-[Matrix channel]: https://matrix.to/#/#niri:matrix.org
-[OpenTabletDriver]: https://opentabletdriver.net/
-[DankMaterialShell]: https://danklinux.com/
-[Noctalia]: https://noctalia.dev/
+Thanks to Ivan Molodetskikh (YaLTeR) and everyone who works on niri, which all of this builds on,
+and to the projects it relies on: [Smithay](https://github.com/Smithay/smithay) (including its
+libei support), [GNOME Remote Desktop](https://gitlab.gnome.org/GNOME/gnome-remote-desktop) and
+[mutter](https://gitlab.gnome.org/GNOME/mutter), whose remote login this follows,
+[greetd](https://git.sr.ht/~kennylevinsen/greetd), whose greeter protocol and PAM session code
+remote-dm uses, and [FreeRDP](https://github.com/FreeRDP/FreeRDP).
