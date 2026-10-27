@@ -184,6 +184,7 @@ use crate::ui::mru::{MruCloseRequest, WindowMruUi, WindowMruUiRenderElement};
 use crate::ui::screen_transition::{self, ScreenTransition};
 use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi, ScreenshotUiRenderElement};
 use crate::utils::scale::{closest_representable_scale, guess_monitor_scale};
+use crate::virtual_output::{client_layout_positions, virtual_output_scale};
 use crate::utils::spawning::{CHILD_DISPLAY, CHILD_ENV};
 use crate::utils::vblank_throttle::VBlankThrottle;
 use crate::utils::watcher::Watcher;
@@ -1989,6 +1990,7 @@ impl State {
                 .and_then(|c| c.scale)
                 .map(|s| s.0)
                 .or_else(|| winit_scale(output))
+                .or_else(|| virtual_output_scale(output))
                 .unwrap_or_else(|| {
                     let size_mm = output.physical_properties().size;
                     let resolution = output.current_mode().unwrap().size;
@@ -3001,12 +3003,23 @@ impl Niri {
             config: Option<niri_config::Position>,
         }
 
+        // Virtual outputs that know where the screencast consumer has them, laid out the same way.
+        let client_positions =
+            client_layout_positions(self.global_space.outputs().chain(new_output));
+
         let config = self.config.borrow();
         let mut outputs = vec![];
         for output in self.global_space.outputs().chain(new_output) {
             let name = output.user_data().get::<OutputName>().unwrap();
             let position = self.global_space.output_geometry(output).map(|geo| geo.loc);
-            let config = config.outputs.find(name).and_then(|c| c.position);
+            let config = config
+                .outputs
+                .find(name)
+                .and_then(|c| c.position)
+                .or_else(|| {
+                    let pos = client_positions.get(output)?;
+                    Some(niri_config::Position { x: pos.x, y: pos.y })
+                });
 
             outputs.push(Data {
                 output: output.clone(),
@@ -3124,6 +3137,7 @@ impl Niri {
             .and_then(|c| c.scale)
             .map(|s| s.0)
             .or_else(|| winit_scale(&output))
+            .or_else(|| virtual_output_scale(&output))
             .unwrap_or_else(|| {
                 let size_mm = output.physical_properties().size;
                 let resolution = output.current_mode().unwrap().size;

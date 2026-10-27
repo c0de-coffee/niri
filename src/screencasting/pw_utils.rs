@@ -61,6 +61,7 @@ use crate::render_helpers::{
 };
 use crate::screencasting::CastRenderElement;
 use crate::utils::{get_monotonic_time, CastSessionId, CastStreamId};
+use crate::virtual_output::ConsumerTag;
 
 mod explicit_sync;
 mod shm_mapping;
@@ -104,6 +105,11 @@ pub enum PwToNiri {
     ResizeOutput {
         stream_id: CastStreamId,
         size: Size<u32, Physical>,
+    },
+    /// The consumer described the output it wants for a flexible-size cast.
+    ConsumerTag {
+        stream_id: CastStreamId,
+        tag: ConsumerTag,
     },
     FatalError,
 }
@@ -497,6 +503,12 @@ impl PipeWire {
                 warn!("error sending ResizeOutput to niri: {err:?}");
             }
         };
+        let to_niri_ = self.to_niri.clone();
+        let consumer_tag = move |tag| {
+            if let Err(err) = to_niri_.send(PwToNiri::ConsumerTag { stream_id, tag }) {
+                warn!("error sending ConsumerTag to niri: {err:?}");
+            }
+        };
 
         let stream = StreamRc::new(
             self.core.clone(),
@@ -597,6 +609,17 @@ impl PipeWire {
                     let gbm = gbm.clone();
                     let formats = formats.clone();
                     move |stream, (), id, pod| {
+                        // Not in libspa's ParamType.
+                        if id == SPA_PARAM_Tag {
+                            if flexible_size {
+                                if let Some(tag) = pod.and_then(parse_consumer_tag) {
+                                    debug!(%stream_id, ?tag, "consumer tag");
+                                    consumer_tag(tag);
+                                }
+                            }
+                            return;
+                        }
+
                         let id = ParamType::from_raw(id);
                         trace!(%stream_id, ?id, "param_changed");
                         let mut inner = inner.borrow_mut();
@@ -2175,6 +2198,55 @@ fn clear_shmbuf(buffer: &Shmbuf) {
     buffer.mapping.clear();
 }
 
+/// Reads what we use from a consumer's tag param.
+///
+/// gnome-remote-desktop sends `org.gnome.preferred-scale` for each RDP client monitor
+/// (`add_tag_params` in `grd-rdp-pipewire-stream.c`), and with our patch also
+/// `org.gnome.position-x`, `org.gnome.position-y` and `org.gnome.is-primary`. A tag is an object
+/// whose info property is a struct of the item count followed by key and value strings.
+fn parse_consumer_tag(pod: &Pod) -> Option<ConsumerTag> {
+    let (_, value) = PodDeserializer::deserialize_any_from(pod.as_bytes()).ok()?;
+    let pod::Value::Object(object) = value else {
+        return None;
+    };
+    let info = object
+        .properties
+        .iter()
+        .find(|prop| prop.key == SPA_PARAM_TAG_info)?;
+    let pod::Value::Struct(items) = &info.value else {
+        return None;
+    };
+
+    let mut strings = items.iter().skip(1).map(|item| match item {
+        pod::Value::String(s) => Some(s.as_str()),
+        _ => None,
+    });
+    let mut tag = ConsumerTag::default();
+    let (mut x, mut y) = (None, None);
+    while let (Some(key), Some(value)) = (strings.next(), strings.next()) {
+        let (Some(key), Some(value)) = (key, value) else {
+            continue;
+        };
+        match key {
+            "org.gnome.preferred-scale" => {
+                tag.scale = value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|scale| scale.is_finite() && *scale > 0.);
+            }
+            "org.gnome.position-x" => x = value.parse::<i32>().ok(),
+            "org.gnome.position-y" => y = value.parse::<i32>().ok(),
+            "org.gnome.is-primary" => tag.primary = value.parse::<bool>().ok(),
+            _ => (),
+        }
+    }
+    if let (Some(x), Some(y)) = (x, y) {
+        tag.position = Some(Point::from((x, y)));
+    }
+
+    (tag != ConsumerTag::default()).then_some(tag)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2187,5 +2259,65 @@ mod tests {
 
         assert!(ShmLayout::new(Size::from((536_870_912, 1))).is_err());
         assert!(ShmLayout::new(Size::from((500_000_000, 3))).is_err());
+    }
+
+    /// A tag like gnome-remote-desktop's (`spa_tag_build_add_dict`).
+    fn tag_pod(items: &[(&str, &str)]) -> Vec<u8> {
+        let mut info = vec![pod::Value::Int(items.len() as i32)];
+        for (key, value) in items {
+            info.push(pod::Value::String(key.to_string()));
+            info.push(pod::Value::String(value.to_string()));
+        }
+        let object = pod::Value::Object(pod::Object {
+            type_: SPA_TYPE_OBJECT_ParamTag,
+            id: SPA_PARAM_Tag,
+            properties: vec![
+                Property {
+                    key: SPA_PARAM_TAG_direction,
+                    flags: PropertyFlags::empty(),
+                    value: pod::Value::Id(spa::utils::Id(SPA_DIRECTION_INPUT)),
+                },
+                Property {
+                    key: SPA_PARAM_TAG_info,
+                    flags: PropertyFlags::empty(),
+                    value: pod::Value::Struct(info),
+                },
+            ],
+        });
+        PodSerializer::serialize(Cursor::new(Vec::new()), &object)
+            .unwrap()
+            .0
+            .into_inner()
+    }
+
+    fn parse(items: &[(&str, &str)]) -> Option<ConsumerTag> {
+        let bytes = tag_pod(items);
+        parse_consumer_tag(Pod::from_bytes(&bytes).unwrap())
+    }
+
+    #[test]
+    fn consumer_tag_from_grd() {
+        assert_eq!(
+            parse(&[("org.gnome.preferred-scale", "1.5")]),
+            Some(ConsumerTag {
+                scale: Some(1.5),
+                ..Default::default()
+            })
+        );
+        assert_eq!(
+            parse(&[
+                ("org.gnome.preferred-scale", "1"),
+                ("org.gnome.position-x", "-2560"),
+                ("org.gnome.position-y", "0"),
+                ("org.gnome.is-primary", "false"),
+            ]),
+            Some(ConsumerTag {
+                scale: Some(1.),
+                position: Some(Point::from((-2560, 0))),
+                primary: Some(false),
+            })
+        );
+        assert_eq!(parse(&[("something.else", "1")]), None);
+        assert_eq!(parse(&[("org.gnome.preferred-scale", "nan")]), None);
     }
 }

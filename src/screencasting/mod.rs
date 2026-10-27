@@ -133,19 +133,14 @@ impl State {
             PwToNiri::StopCast { session_id } => self.niri.stop_cast(session_id),
             PwToNiri::Redraw { stream_id } => self.redraw_cast(stream_id),
             PwToNiri::ResizeOutput { stream_id, size } => {
-                let output = self
-                    .niri
-                    .casting
-                    .casts
-                    .iter()
-                    .find(|cast| cast.stream_id == stream_id && cast.flexible_size)
-                    .and_then(|cast| match &cast.target {
-                        CastTarget::Output { output, .. } => output.upgrade(),
-                        _ => None,
-                    });
-                if let Some(output) = output {
+                if let Some(output) = self.niri.flexible_cast_output(stream_id) {
                     let size = Size::from((size.w as i32, size.h as i32));
                     self.niri.resize_virtual_output(&output, size);
+                }
+            }
+            PwToNiri::ConsumerTag { stream_id, tag } => {
+                if let Some(output) = self.niri.flexible_cast_output(stream_id) {
+                    self.niri.apply_virtual_output_tag(&output, tag);
                 }
             }
             PwToNiri::FatalError => {
@@ -522,6 +517,19 @@ impl State {
 }
 
 impl Niri {
+    /// The output of a flexible-size cast (a virtual output), whose size and scale follow the
+    /// consumer.
+    fn flexible_cast_output(&self, stream_id: CastStreamId) -> Option<Output> {
+        self.casting
+            .casts
+            .iter()
+            .find(|cast| cast.stream_id == stream_id && cast.flexible_size)
+            .and_then(|cast| match &cast.target {
+                CastTarget::Output { output, .. } => output.upgrade(),
+                _ => None,
+            })
+    }
+
     pub fn refresh_mapped_cast_window_rules(&mut self) {
         // O(N^2) but should be fine since there aren't many casts usually.
         self.layout.with_windows_mut(|mapped, _| {
