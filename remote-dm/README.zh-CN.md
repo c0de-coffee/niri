@@ -39,7 +39,7 @@ RDP 客户端 ──① 连接──▶ grd 系统服务（端口 3389，先验�
 
 ### 1. 安装软件包
 
-在 Arch Linux 上，最省事的是直接装本仓库 [Releases](https://github.com/c0de-coffee/niri/releases) 里编好的包（同时装上带远程桌面的 niri）：
+在 Arch Linux 上，最省事的是直接装本仓库 [Releases](https://github.com/c0de-coffee/niri-remote/releases) 里编好的包（同时装上带远程桌面的 niri）：
 
 ```sh
 sudo pacman -U niri-remote-desktop-*.pkg.tar.zst remote-dm-*.pkg.tar.zst

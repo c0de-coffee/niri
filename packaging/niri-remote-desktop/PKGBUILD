@@ -2,7 +2,7 @@
 #
 # niri with remote desktop support (org.gnome.Mutter.RemoteDesktop, virtual outputs), for
 # GNOME-style RDP remote login with gnome-remote-desktop and remote-dm. Built from a release tag
-# of https://github.com/c0de-coffee/niri (remote-desktop branch). Based on Arch's niri PKGBUILD.
+# of https://github.com/c0de-coffee/niri-remote (remote-desktop branch). Based on Arch's niri PKGBUILD.
 
 pkgname=niri-remote-desktop
 _tag=v26.04-rd1
@@ -10,7 +10,7 @@ pkgver=26.04.rd1
 pkgrel=1
 pkgdesc="A scrollable-tiling Wayland compositor (with remote desktop support)"
 arch=(x86_64)
-url="https://github.com/c0de-coffee/niri"
+url="https://github.com/c0de-coffee/niri-remote"
 license=(GPL-3.0-or-later)
 depends=(
   cairo
@@ -43,10 +43,10 @@ optdepends=(
 provides=(niri wayland-compositor)
 conflicts=(niri niri-remote-desktop-git)
 source=("niri-$_tag.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
-sha256sums=('63a44681daec1f0eae526eb0302aba4238bd78143022fa155be1fac5774412bd')
+sha256sums=('8a16d15c5343848b83f5ef8df9a1b2b0f713175db5c21cb26593aa4af8421ffd')
 
 _srcdir() {
-  printf 'niri-%s' "${_tag#v}"
+  printf 'niri-remote-%s' "${_tag#v}"
 }
 
 prepare() {

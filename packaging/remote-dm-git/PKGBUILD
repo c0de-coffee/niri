@@ -3,7 +3,7 @@
 # remote-dm: display manager for remote logins with gnome-remote-desktop (see remote-dm/README.md).
 #
 # Builds remote-dm/ from the remote-desktop branch: of the repository this PKGBUILD lives in
-# (committed changes only), or of https://github.com/c0de-coffee/niri when built elsewhere (AUR).
+# (committed changes only), or of https://github.com/c0de-coffee/niri-remote when built elsewhere (AUR).
 # Override with NIRI_REPO=<url or path> and NIRI_BRANCH=<branch>.
 
 pkgname=remote-dm-git
@@ -11,7 +11,7 @@ pkgver=r0.0
 pkgrel=1
 pkgdesc="Display manager for remote logins with gnome-remote-desktop"
 arch=(x86_64)
-url="https://github.com/c0de-coffee/niri"
+url="https://github.com/c0de-coffee/niri-remote"
 license=(GPL-3.0-only)
 depends=(
   dbus
@@ -41,7 +41,7 @@ backup=(
   etc/remote-dm/greeter-noctalia.kdl
 )
 # Inside a checkout of the repository (packaging/<pkg>/): the local repo; elsewhere (AUR): GitHub.
-_repo=${NIRI_REPO:-$( [ -d "$startdir/../../.git" ] && realpath "$startdir/../.." || echo https://github.com/c0de-coffee/niri)}
+_repo=${NIRI_REPO:-$( [ -d "$startdir/../../.git" ] && realpath "$startdir/../.." || echo https://github.com/c0de-coffee/niri-remote)}
 source=("niri::git+file://${_repo#file://}#branch=${NIRI_BRANCH:-remote-desktop}")
 case $_repo in *://*) source=("niri::git+$_repo#branch=${NIRI_BRANCH:-remote-desktop}") ;; esac
 sha256sums=('SKIP')

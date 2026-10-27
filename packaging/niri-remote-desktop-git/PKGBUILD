@@ -4,7 +4,7 @@
 # logins with gnome-remote-desktop and remote-dm. Based on Arch's niri PKGBUILD.
 #
 # Builds the remote-desktop branch: of the repository this PKGBUILD lives in (committed changes
-# only), or of https://github.com/c0de-coffee/niri when built elsewhere (AUR). Override with
+# only), or of https://github.com/c0de-coffee/niri-remote when built elsewhere (AUR). Override with
 # NIRI_REPO=<url or path> and NIRI_BRANCH=<branch>.
 
 pkgname=niri-remote-desktop-git
@@ -12,7 +12,7 @@ pkgver=26.4.0.r0.g00000000
 pkgrel=1
 pkgdesc="A scrollable-tiling Wayland compositor (with remote desktop support)"
 arch=(x86_64)
-url="https://github.com/c0de-coffee/niri"
+url="https://github.com/c0de-coffee/niri-remote"
 license=(GPL-3.0-or-later)
 depends=(
   cairo
@@ -44,7 +44,7 @@ optdepends=(
 provides=(niri wayland-compositor)
 conflicts=(niri niri-remote-desktop)
 # Inside a checkout of the repository (packaging/<pkg>/): the local repo; elsewhere (AUR): GitHub.
-_repo=${NIRI_REPO:-$( [ -d "$startdir/../../.git" ] && realpath "$startdir/../.." || echo https://github.com/c0de-coffee/niri)}
+_repo=${NIRI_REPO:-$( [ -d "$startdir/../../.git" ] && realpath "$startdir/../.." || echo https://github.com/c0de-coffee/niri-remote)}
 source=("niri::git+file://${_repo#file://}#branch=${NIRI_BRANCH:-remote-desktop}")
 case $_repo in *://*) source=("niri::git+$_repo#branch=${NIRI_BRANCH:-remote-desktop}") ;; esac
 sha256sums=('SKIP')

@@ -55,7 +55,7 @@ started for it.
 ### 1. Packages
 
 On Arch Linux, the simplest way is to install the prebuilt packages from this repository's
-[Releases](https://github.com/c0de-coffee/niri/releases) (together with a niri with remote desktop
+[Releases](https://github.com/c0de-coffee/niri-remote/releases) (together with a niri with remote desktop
 support):
 
 ```sh

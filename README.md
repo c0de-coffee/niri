@@ -43,7 +43,7 @@ It has two parts:
 ## Quick start (Arch Linux)
 
 1. **Install the packages**: download `niri-remote-desktop` and `remote-dm` from
-   [Releases](https://github.com/c0de-coffee/niri/releases), then:
+   [Releases](https://github.com/c0de-coffee/niri-remote/releases), then:
 
    ```sh
    sudo pacman -U niri-remote-desktop-*.pkg.tar.zst remote-dm-*.pkg.tar.zst

@@ -34,7 +34,7 @@
 
 ## 快速开始（Arch Linux）
 
-1. **安装软件包**：从 [Releases](https://github.com/c0de-coffee/niri/releases) 下载
+1. **安装软件包**：从 [Releases](https://github.com/c0de-coffee/niri-remote/releases) 下载
    `niri-remote-desktop` 和 `remote-dm` 两个包，然后安装：
 
    ```sh
