@@ -183,6 +183,7 @@ enum CastState {
         // Lazily-initialized to keep the initialization to a single place.
         damage_tracker: Option<OutputDamageTracker>,
         cursor_damage_tracker: Option<OutputDamageTracker>,
+        /// `None` while the cursor isn't in this stream.
         last_cursor_location: Option<Point<i32, Physical>>,
     },
 }
@@ -210,8 +211,9 @@ pub struct CursorData<'a, E> {
     elem_count: usize,
     /// Cursor elements relocated to (0, 0).
     relocated: Vec<RelocateRenderElement<&'a E>>,
-    /// Location of the cursor's hotspot in the video buffer.
-    location: Point<i32, Physical>,
+    /// Location of the cursor's hotspot in the video buffer, or `None` if the cursor isn't in
+    /// this stream at all (rather than in it but invisible).
+    location: Option<Point<i32, Physical>>,
     /// Location of the cursor's hotspot on the cursor bitmap.
     hotspot: Point<i32, Physical>,
     /// Size of the elements' encompassing geo.
@@ -224,11 +226,11 @@ impl<'a, E: Element> CursorData<'a, E> {
     pub fn compute(
         elements: &'a [E],
         elem_count: usize,
-        location: Point<f64, Logical>,
+        location: Option<Point<f64, Logical>>,
         scale: Scale<f64>,
     ) -> Self {
         let pointer_elements = &elements[..elem_count];
-        let location = location.to_physical_precise_round(scale);
+        let location = location.map(|loc| loc.to_physical_precise_round(scale));
 
         let geo = encompassing_geo(scale, pointer_elements.iter());
         let relocated = Vec::from_iter(pointer_elements.iter().map(|elem| {
@@ -239,7 +241,7 @@ impl<'a, E: Element> CursorData<'a, E> {
             elem_count,
             relocated,
             location,
-            hotspot: location - geo.loc,
+            hotspot: location.unwrap_or_default() - geo.loc,
             size: geo.size,
             scale,
         }
@@ -1364,19 +1366,24 @@ impl Cast {
         let (damage, states) = damage_tracker.damage_output(1, elements).unwrap();
 
         if self.cursor_mode == CursorMode::Metadata {
-            let (damage, _states) = cursor_damage_tracker
-                .damage_output(1, &cursor_data.relocated)
-                .unwrap();
-            redraw_cursor = damage.is_some();
-            has_cursor_update =
-                redraw_cursor || *last_cursor_location != Some(cursor_data.location);
+            if let Some(location) = cursor_data.location {
+                let (damage, _states) = cursor_damage_tracker
+                    .damage_output(1, &cursor_data.relocated)
+                    .unwrap();
+                // Send the bitmap again when the cursor comes back: the consumer may show one
+                // cursor for several streams, so another one may have changed it meanwhile.
+                redraw_cursor = damage.is_some() || last_cursor_location.is_none();
+                has_cursor_update = redraw_cursor || *last_cursor_location != Some(location);
+            } else {
+                has_cursor_update = last_cursor_location.is_some();
+            }
         }
 
         if damage.is_none() && !has_cursor_update {
             trace!("no damage, skipping frame");
             return false;
         }
-        *last_cursor_location = Some(cursor_data.location);
+        *last_cursor_location = cursor_data.location;
         drop(inner);
 
         let Some(pw_buffer) = self.dequeue_available_buffer() else {
@@ -2051,9 +2058,16 @@ unsafe fn add_cursor_metadata(
             return;
         };
 
+        let Some(location) = cursor_data.location else {
+            // Not in this stream: an invalid cursor (zero ID), like mutter.
+            cursor_meta.id = 0;
+            cursor_meta.bitmap_offset = 0;
+            return;
+        };
+
         cursor_meta.id = 1;
-        cursor_meta.position.x = cursor_data.location.x;
-        cursor_meta.position.y = cursor_data.location.y;
+        cursor_meta.position.x = location.x;
+        cursor_meta.position.y = location.y;
         cursor_meta.hotspot.x = cursor_data.hotspot.x;
         cursor_meta.hotspot.y = cursor_data.hotspot.y;
 

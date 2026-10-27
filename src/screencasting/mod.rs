@@ -20,6 +20,7 @@ use crate::niri::{CastTarget, Niri, OutputRenderElements, PointerRenderElements,
 use crate::niri_render_elements;
 use crate::render_helpers::{RenderCtx, RenderTarget};
 use crate::utils::{get_monotonic_time, CastSessionId, CastStreamId};
+use crate::virtual_output::is_virtual;
 use crate::window::mapped::{MappedId, WindowCastRenderElements};
 
 mod pw_utils;
@@ -261,7 +262,7 @@ impl State {
                 });
 
                 let cursor_data =
-                    CursorData::compute(&elements, main_start, pointer_location, scale);
+                    CursorData::compute(&elements, main_start, Some(pointer_location), scale);
 
                 if cast.dequeue_buffer_and_render(
                     renderer,
@@ -629,20 +630,26 @@ impl Niri {
             }
 
             if cursor_data.is_none() {
-                let mut pointer_pos = Point::default();
-                if self.pointer_visibility.is_visible() {
-                    let output_geo = self.global_space.output_geometry(output).unwrap().to_f64();
-                    let pointer_loc = self
-                        .tablet_cursor_location
-                        .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
-                    // Only render when the pointer is within the output. Otherwise, it will
-                    // happily appear anywhere outside the output video source in OBS.
-                    if output_geo.contains(pointer_loc) {
-                        pointer_pos = pointer_loc - output_geo.loc;
-                        self.render_pointer(renderer, output, &mut |elem| {
-                            elements.push(elem.into())
-                        });
-                    }
+                let output_geo = self.global_space.output_geometry(output).unwrap().to_f64();
+                let pointer_loc = self
+                    .tablet_cursor_location
+                    .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
+                let pointer_on_output = output_geo.contains(pointer_loc);
+
+                let mut pointer_pos = Some(Point::default());
+                // Only render when the pointer is within the output. Otherwise, it will
+                // happily appear anywhere outside the output video source in OBS.
+                if self.pointer_visibility.is_visible() && pointer_on_output {
+                    pointer_pos = Some(pointer_loc - output_geo.loc);
+                    self.render_pointer(renderer, output, &mut |elem| elements.push(elem.into()));
+                }
+
+                // gnome-remote-desktop shows one pointer for all of its virtual monitors and
+                // takes every cursor bitmap it gets as that pointer, so the invisible cursor of
+                // an output the pointer just left can hide it on the output it moved to. Tell it
+                // the cursor isn't in this stream instead, like mutter does.
+                if !pointer_on_output && is_virtual(output) {
+                    pointer_pos = None;
                 }
 
                 let main_start = elements.len();
@@ -745,7 +752,8 @@ impl Niri {
                 elements.push(CastRenderElement::from(elem))
             });
 
-            let cursor_data = CursorData::compute(&elements, main_start, pointer_location, scale);
+            let cursor_data =
+                CursorData::compute(&elements, main_start, Some(pointer_location), scale);
 
             if cast.dequeue_buffer_and_render(renderer, &elements, &cursor_data, bbox.size, scale) {
                 cast.record_frame_time(target_presentation_time);
