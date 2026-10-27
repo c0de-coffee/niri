@@ -64,5 +64,5 @@ build() {
 package() {
   cd niri/remote-dm
   DESTDIR="$pkgdir" ./install.sh --no-build > /dev/null
-  install -vDm 644 README.md -t "$pkgdir/usr/share/doc/remote-dm/"
+  install -vDm 644 README.md README.zh-CN.md -t "$pkgdir/usr/share/doc/remote-dm/"
 }
