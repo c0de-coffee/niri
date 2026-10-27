@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: c0de-coffee <53132135+c0de-coffee@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 23:15:36 +0900
+Subject: [PATCH] rdp-pipewire-stream: Tell the compositor where each virtual
+ monitor is
+
+The compositor creates one virtual monitor per client monitor, but only
+learns their sizes and scales. It doesn't know how the client arranges
+them or which one is primary, so it lays them out in creation order (the
+client's monitor order), which may not match the client: moving a window
+to the monitor on the left can move it to the one on the right, and
+windows open on whichever monitor came first rather than the primary one.
+
+Add the monitor's position in the client's layout (physical pixels,
+primary monitor at 0,0) and whether it's the primary monitor to the tag
+that already carries the preferred scale. Compositors that don't know
+these keys ignore them.
+---
+ src/grd-rdp-pipewire-stream.c | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/src/grd-rdp-pipewire-stream.c b/src/grd-rdp-pipewire-stream.c
+index eae08d0..866eab6 100644
+--- a/src/grd-rdp-pipewire-stream.c
++++ b/src/grd-rdp-pipewire-stream.c
+@@ -380,8 +380,10 @@ add_tag_params (GrdRdpPipeWireStream        *stream,
+                 GArray                      *pod_offsets)
+ {
+   struct spa_pod_frame tag_frame;
+-  struct spa_dict_item items[1];
++  struct spa_dict_item items[4];
+   char scale_string[G_ASCII_DTOSTR_BUF_SIZE];
++  char x_string[16];
++  char y_string[16];
+   double scale;
+ 
+   grd_append_pod_offset (pod_offsets, pod_builder);
+@@ -393,6 +395,18 @@ add_tag_params (GrdRdpPipeWireStream        *stream,
+   g_ascii_dtostr (scale_string, G_ASCII_DTOSTR_BUF_SIZE, scale);
+   items[0] = SPA_DICT_ITEM_INIT ("org.gnome.preferred-scale", scale_string);
+ 
++  /*
++   * Where the monitor is in the client's monitor layout (physical pixels,
++   * primary monitor at 0,0), so that the compositor can arrange its virtual
++   * monitors the same way and put things on the primary one.
++   */
++  g_snprintf (x_string, sizeof (x_string), "%d", virtual_monitor->pos_x);
++  g_snprintf (y_string, sizeof (y_string), "%d", virtual_monitor->pos_y);
++  items[1] = SPA_DICT_ITEM_INIT ("org.gnome.position-x", x_string);
++  items[2] = SPA_DICT_ITEM_INIT ("org.gnome.position-y", y_string);
++  items[3] = SPA_DICT_ITEM_INIT ("org.gnome.is-primary",
++                                 virtual_monitor->is_primary ? "true" : "false");
++
+   spa_tag_build_add_dict (pod_builder,
+                           &SPA_DICT_INIT (items, G_N_ELEMENTS (items)));
+ 
